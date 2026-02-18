@@ -1,0 +1,29 @@
+# Notes on Ralph Loop and Recursive Language Model (RLM)
+
+Ralph loop is an outer iterate-until-pass loop: **generate**, **validate**, and **feed back failures** into the next attempt.
+The loop keeps progress in artifacts (files, diffs, logs) rather than relying on the model’s short-term memory.
+
+A simple Ralph loop looks like this:
+- Generate an output for a goal
+- Run deterministic checks (tests, schema validation, rule checks)
+- If checks fail, turn failures into constraints and retry
+- Stop when checks pass or you hit a budget
+
+RLM (Recursive Language Model) is a pattern for handling long context by treating the document as an environment.
+Instead of stuffing the entire document into the prompt, RLM loads it into a sandboxed runtime and analyzes it with code.
+When the runtime needs “understanding” of a slice, it can call a smaller LLM query (often called llmQuery) on that slice.
+
+RLM reduces:
+- context window pressure (you fetch only what you need)
+- context rot (you don’t keep re-sending the entire document)
+- cost (you avoid giant prompts)
+
+Combining them:
+Ralph loop gives you convergence by repeated validation, while RLM gives you scalability by letting the agent inspect large context programmatically.
+You can think of it like CI for reasoning: the generator writes an artifact, validators act like tests, and failures become the next iteration’s input.
+
+Design constraints that help:
+- Evidence must be verbatim quotes from the document
+- Keep summaries short and structured
+- Prefer hard checks first, then a semantic judge
+- Store every iteration’s output and failures for auditability
