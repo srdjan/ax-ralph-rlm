@@ -20,27 +20,31 @@ export function hardValidate(
     );
   }
 
-  const ev = Array.isArray(out.evidence) ? out.evidence : [];
+  const ev = out.evidence;
   if (ev.length < 3 || ev.length > 8) {
     issues.push(`evidence must contain 3–8 quotes (found ${ev.length}).`);
   }
 
   const seen = new Set<string>();
   for (const [i, q] of ev.entries()) {
-    const quote = (q ?? "").trim();
+    const quote = q.trim();
     if (quote.length === 0) {
       issues.push(`evidence[${i}] is empty.`);
       continue;
     }
     if (quote.length > 160) {
-      issues.push(`evidence[${i}] is too long (${quote.length} chars); keep quotes short.`);
+      issues.push(
+        `evidence[${i}] is too long (${quote.length} chars); keep quotes short.`,
+      );
     }
     if (seen.has(quote)) {
       issues.push(`evidence[${i}] is a duplicate quote.`);
     }
     seen.add(quote);
     if (!doc.includes(quote)) {
-      issues.push(`evidence[${i}] is not a verbatim substring of the document.`);
+      issues.push(
+        `evidence[${i}] is not a verbatim substring of the document.`,
+      );
     }
   }
 
@@ -52,10 +56,13 @@ export function hardValidate(
   return { ok: issues.length === 0, issues };
 }
 
-export function buildEvidenceContexts(doc: string, evidence: string[]): string[] {
+export function buildEvidenceContexts(
+  doc: string,
+  evidence: string[],
+): string[] {
   const ctx: string[] = [];
   for (const q of evidence) {
-    const quote = (q ?? "").trim();
+    const quote = q.trim();
     const idx = doc.indexOf(quote);
     if (idx < 0) {
       ctx.push(`(missing quote) ${quote}`);

@@ -8,34 +8,16 @@ import { makeWorkerAgent } from "./lib/worker.ts";
 import { makeJudgeAgent } from "./lib/judge.ts";
 import { runRalphLoop } from "./lib/ralph.ts";
 
-type Args = {
-  query?: string;
-  doc?: string;
-  maxIters?: number;
-  out?: string;
-};
-
-function usage(): never {
-  console.log(
-    [
-      "Usage:",
-      "  deno task demo -- --query "..." --doc docs/long.txt [--maxIters 4] [--out out]",
-    ].join("\n"),
-  );
-  Deno.exit(1);
-}
-
 const args = parseArgs(Deno.args, {
-  string: ["query", "doc", "out"],
+  string: ["query", "doc", "out", "maxIters"],
   default: {},
-}) as Args;
+});
 
-const query = args.query ?? "Explain Ralph loop and RLM and how they work together";
+const query = args.query ??
+  "Explain Ralph loop and RLM and how they work together";
 const docPath = args.doc ?? "docs/long.txt";
 const maxIters = Number(args.maxIters ?? getEnv("AX_MAX_ITERS", "4"));
 const outDir = args.out ?? getEnv("AX_OUT_DIR", "out");
-
-if (!docPath) usage();
 
 const doc = await Deno.readTextFile(docPath);
 

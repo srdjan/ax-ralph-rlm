@@ -1,11 +1,14 @@
-import type { GenerateOut, IterTrace } from "./types.ts";
-import { hardValidate, buildEvidenceContexts } from "./hard_validate.ts";
+import type { GenerateOut, IterTrace, JudgeOut } from "./types.ts";
+import { buildEvidenceContexts, hardValidate } from "./hard_validate.ts";
+import type { makeWorkerAgent } from "./worker.ts";
+import type { makeJudgeAgent } from "./judge.ts";
+import type { makeClaudeAI, makeGptAI } from "./ai.ts";
 
 type RalphLoopDeps = {
-  worker: any;
-  judge: any;
-  claudeAI: any;
-  gptAI: any;
+  worker: ReturnType<typeof makeWorkerAgent>;
+  judge: ReturnType<typeof makeJudgeAgent>;
+  claudeAI: ReturnType<typeof makeClaudeAI>;
+  gptAI: ReturnType<typeof makeGptAI>;
 };
 
 type RalphLoopArgs = {
@@ -28,14 +31,14 @@ function feedbackConstraints(
   iter: number,
   prev: GenerateOut,
   hardIssues: string[],
-  judgeIssues: string[] | undefined,
+  judgeIssues: string[],
 ): string {
   const lines: string[] = [];
   lines.push(baseConstraints());
   lines.push("");
   lines.push(`Iteration ${iter} feedback:`);
   for (const i of hardIssues) lines.push(`- HARD: ${i}`);
-  for (const i of (judgeIssues ?? [])) lines.push(`- JUDGE: ${i}`);
+  for (const i of judgeIssues) lines.push(`- JUDGE: ${i}`);
   lines.push("");
   lines.push("Previous attempt (fix, don't repeat mistakes):");
   lines.push(prev.answer);
@@ -53,6 +56,7 @@ export async function runRalphLoop(
   const traces: IterTrace[] = [];
 
   for (let iter = 1; iter <= args.maxIters; iter++) {
+    // .forward() returns a broad type from Ax; cast to the expected output shape
     const generated = await deps.worker.forward(deps.claudeAI, {
       context: args.doc,
       query: args.query,
@@ -61,21 +65,18 @@ export async function runRalphLoop(
 
     const hard = hardValidate(generated, args.doc);
 
-    const evidenceContext = buildEvidenceContexts(args.doc, generated.evidence ?? []);
+    const evidenceContext = buildEvidenceContexts(args.doc, generated.evidence);
 
-    let judge: { ok: "yes" | "no"; issues: string[] } | undefined = undefined;
-    if (hard.ok) {
-      judge = await deps.judge.forward(deps.gptAI, {
+    const judge: JudgeOut = hard.ok
+      ? await deps.judge.forward(deps.gptAI, {
         query: args.query,
         answer: generated.answer,
         evidence: generated.evidence,
         evidenceContext,
-      });
-    } else {
-      judge = { ok: "no", issues: [] };
-    }
+      }) as JudgeOut
+      : { ok: "no", issues: [] };
 
-    const passed = hard.ok && judge.ok === "yes" && (judge.issues?.length ?? 0) === 0;
+    const passed = hard.ok && judge.ok === "yes" && judge.issues.length === 0;
 
     const trace: IterTrace = {
       iter,
@@ -89,7 +90,9 @@ export async function runRalphLoop(
     };
     traces.push(trace);
 
-    const tracePath = `${args.outDir}/iter-${String(iter).padStart(2, "0")}.json`;
+    const tracePath = `${args.outDir}/iter-${
+      String(iter).padStart(2, "0")
+    }.json`;
     await Deno.writeTextFile(tracePath, JSON.stringify(trace, null, 2));
 
     last = generated;
@@ -98,7 +101,12 @@ export async function runRalphLoop(
       return { ok: true, output: generated, traces };
     }
 
-    constraints = feedbackConstraints(iter, generated, hard.issues, judge.issues);
+    constraints = feedbackConstraints(
+      iter,
+      generated,
+      hard.issues,
+      judge.issues,
+    );
   }
 
   return { ok: false, output: last, traces };
