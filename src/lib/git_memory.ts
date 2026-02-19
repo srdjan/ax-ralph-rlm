@@ -1,16 +1,28 @@
 import type { IterTrace } from "./types.ts";
 
-export type CommitResult =
-  | { ok: true; hash: string }
+export type StoreResult =
+  | { ok: true }
   | { ok: false; error: string };
 
-type GitResult = {
-  ok: boolean;
-  stdout: string;
-  stderr: string;
+type SessionIteration = {
+  iter: number;
+  tracePath: string;
+  sourcePath: string;
+  storedAt: string;
 };
 
-const BODY_WRAP = 72;
+type SessionRecord = {
+  createdAt: string;
+  updatedAt: string;
+  iterations: SessionIteration[];
+};
+
+type SessionIndex = {
+  version: 1;
+  sessions: Record<string, SessionRecord>;
+};
+
+const INDEX_FILE_NAME = "session-index.json";
 
 function currentLocalDateString(): string {
   const now = new Date();
@@ -18,10 +30,6 @@ function currentLocalDateString(): string {
   const month = String(now.getMonth() + 1).padStart(2, "0");
   const day = String(now.getDate()).padStart(2, "0");
   return `${year}-${month}-${day}`;
-}
-
-function normalizeWhitespace(value: string): string {
-  return value.replace(/\s+/g, " ").trim();
 }
 
 function djb2Hex(input: string): string {
@@ -32,134 +40,72 @@ function djb2Hex(input: string): string {
   return hash.toString(16).padStart(8, "0").slice(0, 8);
 }
 
-function wrapText(
-  text: string,
-  width: number,
-  firstPrefix = "",
-  nextPrefix = firstPrefix,
-): string[] {
-  const words = normalizeWhitespace(text).split(" ").filter(Boolean);
-  if (words.length === 0) return [firstPrefix.trimEnd()];
+function toPosixPath(path: string): string {
+  return path.replaceAll("\\", "/");
+}
 
-  const lines: string[] = [];
-  let line = firstPrefix;
-  let lineLength = firstPrefix.length;
-
-  for (const word of words) {
-    const separator = lineLength > firstPrefix.length && line.trim().length > 0
-      ? 1
-      : 0;
-
-    if (lineLength + separator + word.length <= width) {
-      line += `${separator ? " " : ""}${word}`;
-      lineLength += separator + word.length;
-      continue;
-    }
-
-    lines.push(line.trimEnd());
-    line = `${nextPrefix}${word}`;
-    lineLength = nextPrefix.length + word.length;
+function dirname(path: string): string {
+  const normalized = toPosixPath(path);
+  const idx = normalized.lastIndexOf("/");
+  if (idx <= 0) {
+    return idx === 0 ? "/" : ".";
   }
-
-  lines.push(line.trimEnd());
-  return lines;
+  return normalized.slice(0, idx);
 }
 
-function countBullets(answer: string): number {
-  return answer
-    .split("\n")
-    .map((line) => line.trimStart())
-    .filter((line) => line.startsWith("- ")).length;
-}
-
-function buildContextJson(trace: IterTrace): string {
-  const judgeOk: "yes" | "no" | null = trace.judge?.ok ?? null;
-  const context = {
-    iter: trace.iter,
-    passed: trace.passed,
-    hard_ok: trace.hard.ok,
-    judge_ok: judgeOk,
-    hard_issues: trace.hard.issues.length,
-    judge_issues: trace.judge?.issues.length ?? 0,
-    bullet_count: countBullets(trace.generated.answer),
-    evidence_count: trace.generated.evidence.length,
+function makeEmptyIndex(): SessionIndex {
+  return {
+    version: 1,
+    sessions: {},
   };
-
-  return JSON.stringify(context);
 }
 
-function buildCommitMessage(
-  trace: IterTrace,
-  tracePath: string,
-  sessionId: string,
-): string {
-  const iterLabel = `iter-${String(trace.iter).padStart(2, "0")}`;
-  const statusLabel = trace.passed ? "passed" : "failed";
-  const header = `chore(ralph-loop): ${iterLabel} ${statusLabel}`;
+async function readIndex(outDir: string): Promise<SessionIndex> {
+  const indexPath = `${outDir}/${INDEX_FILE_NAME}`;
 
-  const bodyLines: string[] = [];
-  const queryPreview = normalizeWhitespace(trace.query).slice(0, 100);
-  bodyLines.push(...wrapText(`Query: ${queryPreview}`, BODY_WRAP));
-  bodyLines.push("");
-
-  if (trace.passed) {
-    bodyLines.push("All validations passed.");
-  } else {
-    const hardIssues = trace.hard.issues.map((issue) =>
-      `HARD: ${normalizeWhitespace(issue)}`
-    );
-    const judgeIssues = (trace.judge?.issues ?? []).map((issue) =>
-      `JUDGE: ${normalizeWhitespace(issue)}`
-    );
-    const allIssues = [...hardIssues, ...judgeIssues];
-
-    bodyLines.push(
-      ...wrapText(
-        `Validation failed with ${allIssues.length} issue(s):`,
-        BODY_WRAP,
-      ),
-    );
-
-    for (const issue of allIssues) {
-      bodyLines.push(...wrapText(issue, BODY_WRAP, "  - ", "    "));
-    }
-  }
-
-  const trailerLines = [
-    "Intent: explore",
-    "Scope: ralph-loop/iteration",
-    `Session: ${sessionId}`,
-    `Refs: ${tracePath}`,
-    `Context: ${buildContextJson(trace)}`,
-  ];
-
-  return [header, "", ...bodyLines, "", ...trailerLines].join("\n");
-}
-
-async function runGit(args: string[]): Promise<GitResult> {
   try {
-    const output = await new Deno.Command("git", {
-      args,
-      stdout: "piped",
-      stderr: "piped",
-    }).output();
+    const raw = await Deno.readTextFile(indexPath);
+    const parsed = JSON.parse(raw) as Partial<SessionIndex>;
 
-    const stdout = new TextDecoder().decode(output.stdout).trim();
-    const stderr = new TextDecoder().decode(output.stderr).trim();
+    if (
+      parsed.version !== 1 || typeof parsed.sessions !== "object" ||
+      !parsed.sessions
+    ) {
+      return makeEmptyIndex();
+    }
 
     return {
-      ok: output.success,
-      stdout,
-      stderr,
+      version: 1,
+      sessions: parsed.sessions,
     };
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    return {
-      ok: false,
-      stdout: "",
-      stderr: message,
-    };
+    if (error instanceof Deno.errors.NotFound) {
+      return makeEmptyIndex();
+    }
+
+    throw error;
   }
+}
+
+async function writeIndexAtomic(
+  outDir: string,
+  index: SessionIndex,
+): Promise<void> {
+  const indexPath = `${outDir}/${INDEX_FILE_NAME}`;
+  const tmpPath = `${indexPath}.tmp`;
+
+  await Deno.writeTextFile(tmpPath, JSON.stringify(index, null, 2));
+  await Deno.rename(tmpPath, indexPath);
+}
+
+function archivePathFor(
+  tracePath: string,
+  sessionId: string,
+  iter: number,
+): string {
+  const outDir = dirname(tracePath);
+  const iterName = `iter-${String(iter).padStart(2, "0")}.json`;
+  return `${outDir}/sessions/${sessionId}/${iterName}`;
 }
 
 export function makeSessionId(query: string): string {
@@ -168,99 +114,88 @@ export function makeSessionId(query: string): string {
   return `${date}/ralph-${hash}`;
 }
 
-export async function commitIterTrace(
+export async function storeIterTrace(
   trace: IterTrace,
   tracePath: string,
   sessionId: string,
-): Promise<CommitResult> {
-  const addResult = await runGit(["add", "--", tracePath]);
-  if (!addResult.ok) {
+): Promise<StoreResult> {
+  try {
+    const outDir = dirname(tracePath);
+    const archivePath = archivePathFor(tracePath, sessionId, trace.iter);
+
+    await Deno.mkdir(dirname(archivePath), { recursive: true });
+    await Deno.copyFile(tracePath, archivePath);
+
+    const index = await readIndex(outDir);
+    const now = new Date().toISOString();
+
+    const existingSession = index.sessions[sessionId];
+    const session: SessionRecord = existingSession
+      ? {
+        ...existingSession,
+        iterations: [...existingSession.iterations],
+      }
+      : {
+        createdAt: now,
+        updatedAt: now,
+        iterations: [],
+      };
+
+    const nextEntry: SessionIteration = {
+      iter: trace.iter,
+      tracePath: toPosixPath(archivePath),
+      sourcePath: toPosixPath(tracePath),
+      storedAt: now,
+    };
+
+    const otherIters = session.iterations.filter((entry) =>
+      entry.iter !== trace.iter
+    );
+    session.iterations = [...otherIters, nextEntry].sort((a, b) =>
+      a.iter - b.iter
+    );
+    session.updatedAt = now;
+
+    index.sessions[sessionId] = session;
+
+    await writeIndexAtomic(outDir, index);
+
+    return { ok: true };
+  } catch (error) {
     return {
       ok: false,
-      error: addResult.stderr || addResult.stdout || "git add failed",
+      error: error instanceof Error ? error.message : String(error),
     };
   }
-
-  const message = buildCommitMessage(trace, tracePath, sessionId);
-  const commitResult = await runGit([
-    "commit",
-    "--no-gpg-sign",
-    "-m",
-    message,
-  ]);
-
-  if (!commitResult.ok) {
-    return {
-      ok: false,
-      error: commitResult.stderr || commitResult.stdout || "git commit failed",
-    };
-  }
-
-  const hashResult = await runGit(["rev-parse", "--short", "HEAD"]);
-  if (!hashResult.ok || !hashResult.stdout) {
-    return {
-      ok: false,
-      error: hashResult.stderr || hashResult.stdout || "git rev-parse failed",
-    };
-  }
-
-  return {
-    ok: true,
-    hash: hashResult.stdout,
-  };
 }
 
 export async function querySessionTraces(
   sessionId: string,
+  outDir = "out",
 ): Promise<IterTrace[]> {
-  const hashesResult = await runGit([
-    "log",
-    "--all",
-    "--reverse",
-    `--grep=Session: ${sessionId}`,
-    "--format=%H",
-  ]);
+  try {
+    const index = await readIndex(outDir);
+    const session = index.sessions[sessionId];
+    if (!session) {
+      return [];
+    }
 
-  if (!hashesResult.ok || !hashesResult.stdout) {
+    const traces: IterTrace[] = [];
+    const ordered = [...session.iterations].sort((a, b) => a.iter - b.iter);
+
+    for (const item of ordered) {
+      try {
+        const raw = await Deno.readTextFile(item.tracePath);
+        const parsed = JSON.parse(raw) as IterTrace;
+        traces.push(parsed);
+      } catch {
+        // Skip missing or malformed files so the rest of the session remains queryable.
+        continue;
+      }
+    }
+
+    return traces;
+  } catch {
     return [];
   }
-
-  const hashes = hashesResult.stdout.split("\n").map((line) => line.trim())
-    .filter(
-      Boolean,
-    );
-
-  const traces: IterTrace[] = [];
-
-  for (const hash of hashes) {
-    const refsResult = await runGit([
-      "log",
-      "-1",
-      "--format=%(trailers:key=Refs,valueonly)",
-      hash,
-    ]);
-
-    if (!refsResult.ok || !refsResult.stdout) {
-      continue;
-    }
-
-    const refPath = refsResult.stdout.split("\n").map((line) => line.trim())
-      .find(
-        Boolean,
-      );
-    if (!refPath) {
-      continue;
-    }
-
-    try {
-      const raw = await Deno.readTextFile(refPath);
-      const parsed = JSON.parse(raw) as IterTrace;
-      traces.push(parsed);
-    } catch {
-      // Skip unreadable or malformed traces and continue assembling history.
-      continue;
-    }
-  }
-
-  return traces;
 }

@@ -41,6 +41,21 @@ deno task demo -- --query "Explain Ralph loop and RLM and how they work together
   - `answer` (3–7 bullet lines)
   - `evidence` (3–8 verbatim quotes that must appear in the document)
 - Per-iteration traces written to `out/iter-XX.json`
+- Session-archived traces written to `out/sessions/<session-id>/iter-XX.json`
+- Session index metadata in `out/session-index.json`
+
+### Session trace retrieval
+
+The loop writes every iteration trace to both:
+
+- `out/iter-XX.json` (latest run's plain files)
+- `out/sessions/<session-id>/iter-XX.json` (session archive)
+
+Use the same session ID printed at startup and query traces programmatically:
+
+```bash
+deno eval 'import { querySessionTraces } from "./src/lib/git_memory.ts"; const traces = await querySessionTraces("2026-02-19/ralph-d8eb40c5"); console.log(traces.length);'
+```
 
 ---
 

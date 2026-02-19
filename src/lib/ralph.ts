@@ -3,7 +3,7 @@ import { buildEvidenceContexts, hardValidate } from "./hard_validate.ts";
 import type { makeWorkerAgent } from "./worker.ts";
 import type { makeJudgeAgent } from "./judge.ts";
 import type { makeClaudeAI, makeGptAI } from "./ai.ts";
-import { commitIterTrace } from "./git_memory.ts";
+import { storeIterTrace } from "./git_memory.ts";
 
 type RalphLoopDeps = {
   worker: ReturnType<typeof makeWorkerAgent>;
@@ -96,14 +96,14 @@ export async function runRalphLoop(
       String(iter).padStart(2, "0")
     }.json`;
     await Deno.writeTextFile(tracePath, JSON.stringify(trace, null, 2));
-    const commitResult = await commitIterTrace(
+    const storeResult = await storeIterTrace(
       trace,
       tracePath,
       args.sessionId,
     );
-    if (!commitResult.ok) {
+    if (!storeResult.ok) {
       console.error(
-        `Warning: failed to commit iteration trace ${tracePath}: ${commitResult.error}`,
+        `Warning: failed to index iteration trace ${tracePath}: ${storeResult.error}`,
       );
     }
 
