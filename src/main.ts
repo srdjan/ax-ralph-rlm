@@ -7,6 +7,7 @@ import { makeClaudeAI, makeGptAI } from "./lib/ai.ts";
 import { makeWorkerAgent } from "./lib/worker.ts";
 import { makeJudgeAgent } from "./lib/judge.ts";
 import { runRalphLoop } from "./lib/ralph.ts";
+import { makeSessionId } from "./lib/git_memory.ts";
 
 const args = parseArgs(Deno.args, {
   string: ["query", "doc", "out", "maxIters"],
@@ -18,6 +19,9 @@ const query = args.query ??
 const docPath = args.doc ?? "docs/long.txt";
 const maxIters = Number(args.maxIters ?? getEnv("AX_MAX_ITERS", "4"));
 const outDir = args.out ?? getEnv("AX_OUT_DIR", "out");
+const sessionId = makeSessionId(query);
+
+console.error(`Session: ${sessionId}`);
 
 const doc = await Deno.readTextFile(docPath);
 
@@ -29,7 +33,7 @@ const judge = makeJudgeAgent();
 
 const result = await runRalphLoop(
   { worker, judge, claudeAI, gptAI },
-  { query, doc, maxIters, outDir },
+  { query, doc, maxIters, outDir, sessionId },
 );
 
 console.log(JSON.stringify(result, null, 2));

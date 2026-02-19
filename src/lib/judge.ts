@@ -7,7 +7,9 @@ export function makeJudgeAgent() {
       name: "gptJudge",
       description:
         "Validates that the answer is supported by the evidence contexts and returns concrete issues if not.",
-      temperature: 0.0,
+      modelConfig: {
+        temperature: 0.0,
+      },
       maxSteps: 10,
       definition: [
         "You are a strict validator.",

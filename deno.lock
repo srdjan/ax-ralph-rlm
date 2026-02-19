@@ -1,0 +1,33 @@
+{
+  "version": "5",
+  "specifiers": {
+    "jsr:@std/cli@*": "1.0.27",
+    "jsr:@std/dotenv@*": "0.225.6",
+    "npm:@ax-llm/ax@*": "17.0.11"
+  },
+  "jsr": {
+    "@std/cli@1.0.27": {
+      "integrity": "eba97edd0891871a7410e835dd94b3c260c709cca5983df2689c25a71fbe04de"
+    },
+    "@std/dotenv@0.225.6": {
+      "integrity": "1d6f9db72f565bd26790fa034c26e45ecb260b5245417be76c2279e5734c421b"
+    }
+  },
+  "npm": {
+    "@ax-llm/ax@17.0.11": {
+      "integrity": "sha512-/9TneQEGEd6vaaHPxDU6NksEqPvW+t4EMgXzawhDyGrFcMWV45b5dwmN4Ix9OlUrgHPVKofa3oHWETi6+FAzZA==",
+      "dependencies": [
+        "@opentelemetry/api",
+        "dayjs"
+      ],
+      "scripts": true,
+      "bin": true
+    },
+    "@opentelemetry/api@1.9.0": {
+      "integrity": "sha512-3giAOQvZiH5F9bMlMiv8+GSPMeqg0dbaeo58/0SlA9sxSqZhnUtxzX9/2FzyhS9sWQf5S0GJE0AKBrFqjpeYcg=="
+    },
+    "dayjs@1.11.19": {
+      "integrity": "sha512-t5EcLVS6QPBNqM2z8fakk/NKel+Xzshgt8FFKAn+qwlD1pzZWxh0nVCrvFK7ZDb6XucZeF9z8C7CBWTRIVApAw=="
+    }
+  }
+}

@@ -7,8 +7,10 @@ export function makeWorkerAgent() {
       name: "claudeWorker",
       description:
         "Generates a short, structured answer with verbatim evidence quotes from a long document using RLM mode.",
-      maxSteps: 18,
-      temperature: 0.2,
+      maxSteps: 30,
+      modelConfig: {
+        temperature: 0.2,
+      },
       // RLM mode lets the agent analyze 'context' inside a sandboxed JS runtime.
       rlm: {
         mode: "inline",

@@ -1,6 +1,6 @@
 {
   "tasks": {
-    "demo": "deno run --allow-env --allow-net --allow-read --allow-write src/main.ts",
+    "demo": "deno run --unstable-worker-options --allow-env --allow-net --allow-read --allow-write --allow-run=git src/main.ts",
     "check": "deno check src/main.ts",
     "fmt": "deno fmt",
     "lint": "deno lint"
