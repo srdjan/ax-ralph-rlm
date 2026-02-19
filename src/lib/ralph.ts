@@ -98,12 +98,16 @@ export async function runRalphLoop(
       console.error(
         `[Ralph][iter ${iter}/${args.maxIters}] Running semantic judge...`,
       );
-      judge = await deps.judge.forward(deps.gptAI, {
+      const raw = await deps.judge.forward(deps.gptAI, {
         query: args.query,
         answer: generated.answer,
         evidence: generated.evidence,
         evidenceContext,
-      }) as JudgeOut;
+      }) as Partial<JudgeOut>;
+      judge = {
+        ok: raw.ok ?? "no",
+        issues: Array.isArray(raw.issues) ? raw.issues : [],
+      };
     } else {
       console.error(
         `[Ralph][iter ${iter}/${args.maxIters}] Skipping semantic judge (hard validation failed).`,
