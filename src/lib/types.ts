@@ -13,6 +13,23 @@ export type JudgeOut = {
   issues: string[];
 };
 
+export type WorkerStepRecord = {
+  stepIndex: number;
+  promptTokens: number;
+  completionTokens: number;
+  totalTokens: number;
+};
+
+export type WorkerError = {
+  tag: "max-steps-reached";
+  message: string;
+  stepsCompleted: number;
+  maxSteps: number;
+  totalTokensUsed: number;
+  suggestions: string[];
+  steps: WorkerStepRecord[];
+};
+
 export type IterTrace = {
   iter: number;
   query: string;
@@ -22,4 +39,5 @@ export type IterTrace = {
   evidenceContext: string[];
   judge?: JudgeOut;
   passed: boolean;
+  workerError?: WorkerError;
 };

@@ -51,10 +51,18 @@ const gptAI = makeGptAI();
 const worker = makeWorkerAgent();
 const judge = makeJudgeAgent();
 
-const result = await runRalphLoop(
-  { worker, judge, claudeAI, gptAI },
-  { query, doc, maxIters, outDir, sessionId, progressHeartbeatMs },
-);
+let result: Awaited<ReturnType<typeof runRalphLoop>>;
+try {
+  result = await runRalphLoop(
+    { worker, judge, claudeAI, gptAI },
+    { query, doc, maxIters, outDir, sessionId, progressHeartbeatMs },
+  );
+} catch (err: unknown) {
+  const msg = err instanceof Error ? err.message : String(err);
+  console.error(`[Ralph] Fatal error: ${msg}`);
+  Deno.exitCode = 1;
+  Deno.exit();
+}
 
 console.log(JSON.stringify(result, null, 2));
 

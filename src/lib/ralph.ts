@@ -1,9 +1,17 @@
-import type { GenerateOut, IterTrace, JudgeOut } from "./types.ts";
+import type {
+  GenerateOut,
+  IterTrace,
+  JudgeOut,
+  WorkerError,
+  WorkerStepRecord,
+} from "./types.ts";
 import { buildEvidenceContexts, hardValidate } from "./hard_validate.ts";
-import type { makeWorkerAgent } from "./worker.ts";
+import { makeStepCollector, type makeWorkerAgent } from "./worker.ts";
 import type { makeJudgeAgent } from "./judge.ts";
 import type { makeClaudeAI, makeGptAI } from "./ai.ts";
 import { storeIterTrace } from "./git_memory.ts";
+import { AxGenerateError } from "npm:@ax-llm/ax";
+import { getEnvInt } from "./env.ts";
 
 type RalphLoopDeps = {
   worker: ReturnType<typeof makeWorkerAgent>;
@@ -87,6 +95,39 @@ async function runWithHeartbeat<T>(
   }
 }
 
+function classifyWorkerError(
+  err: unknown,
+  steps: WorkerStepRecord[],
+): WorkerError | null {
+  if (!(err instanceof AxGenerateError)) return null;
+
+  const isMaxSteps = err.message.includes("Max steps reached") ||
+    (err.cause instanceof Error &&
+      err.cause.message.includes("Max steps reached"));
+  if (!isMaxSteps) return null;
+
+  const lastStep = steps.at(-1);
+  const stepsCompleted = lastStep ? lastStep.stepIndex + 1 : 0;
+  const maxSteps = getEnvInt("AX_WORKER_MAX_STEPS", 80);
+  const totalTokensUsed = lastStep?.totalTokens ?? 0;
+
+  return {
+    tag: "max-steps-reached",
+    message: err.message,
+    stepsCompleted,
+    maxSteps,
+    totalTokensUsed,
+    steps,
+    suggestions: [
+      `Increase AX_WORKER_MAX_STEPS (current: ${maxSteps}). Try ${
+        maxSteps * 2
+      }.`,
+      "Increase AX_WORKER_MAX_LLM_CALLS proportionally.",
+      "Simplify the query or reduce document length.",
+    ],
+  };
+}
+
 export async function runRalphLoop(
   deps: RalphLoopDeps,
   args: RalphLoopArgs,
@@ -104,29 +145,101 @@ export async function runRalphLoop(
     console.error(
       `[Ralph][iter ${iter}/${args.maxIters}] Generating candidate output...`,
     );
-    const {
-      value: generated,
-      durationMs: generateDurationMs,
-      // .forward() returns a broad type from Ax; cast to the expected output shape
-    } = await runWithHeartbeat(
-      iter,
-      args.maxIters,
-      "Generation",
-      args.progressHeartbeatMs,
-      async () =>
-        await deps.worker.forward(deps.claudeAI, {
-          context: args.doc,
-          query: args.query,
-          constraints,
-        }) as GenerateOut,
-    );
-    console.error(
-      `[Ralph][iter ${iter}/${args.maxIters}] Generated answer bullets=${
-        countBullets(generated.answer)
-      }, evidence=${generated.evidence.length}, duration=${
-        formatDuration(generateDurationMs)
-      }`,
-    );
+
+    const collector = makeStepCollector();
+    let generated: GenerateOut;
+    let workerError: WorkerError | undefined;
+
+    try {
+      const {
+        value,
+        durationMs: generateDurationMs,
+      } = await runWithHeartbeat(
+        iter,
+        args.maxIters,
+        "Generation",
+        args.progressHeartbeatMs,
+        async () =>
+          await deps.worker.forward(deps.claudeAI, {
+            context: args.doc,
+            query: args.query,
+            constraints,
+          }, { stepHooks: collector.hooks }) as GenerateOut,
+      );
+      generated = value;
+      console.error(
+        `[Ralph][iter ${iter}/${args.maxIters}] Generated answer bullets=${
+          countBullets(generated.answer)
+        }, evidence=${generated.evidence.length}, duration=${
+          formatDuration(generateDurationMs)
+        }`,
+      );
+    } catch (err: unknown) {
+      const classified = classifyWorkerError(err, collector.steps);
+      if (classified === null) throw err;
+
+      workerError = classified;
+      generated = { answer: "", evidence: [] };
+
+      console.error(
+        `[Ralph][iter ${iter}/${args.maxIters}] Worker exhausted step budget ` +
+          `(${workerError.stepsCompleted}/${workerError.maxSteps} steps).`,
+      );
+      console.error(`  Tokens used: ${workerError.totalTokensUsed}`);
+      for (const pct of [0.25, 0.5, 0.75, 1.0]) {
+        const idx = Math.min(
+          Math.floor(workerError.steps.length * pct) - 1,
+          workerError.steps.length - 1,
+        );
+        if (idx >= 0) {
+          const s = workerError.steps[idx];
+          console.error(
+            `  After step ${s.stepIndex + 1}: ${s.totalTokens} tokens`,
+          );
+        }
+      }
+      for (const s of workerError.suggestions) {
+        console.error(`  -> ${s}`);
+      }
+    }
+
+    if (workerError !== undefined) {
+      const trace: IterTrace = {
+        iter,
+        query: args.query,
+        constraints,
+        generated,
+        hard: { ok: false, issues: ["Worker exhausted step budget"] },
+        evidenceContext: [],
+        passed: false,
+        workerError,
+      };
+      traces.push(trace);
+
+      const tracePath = `${args.outDir}/iter-${
+        String(iter).padStart(2, "0")
+      }.json`;
+      console.error(
+        `[Ralph][iter ${iter}/${args.maxIters}] Writing trace ${tracePath}`,
+      );
+      await Deno.writeTextFile(tracePath, JSON.stringify(trace, null, 2));
+      const storeResult = await storeIterTrace(
+        trace,
+        tracePath,
+        args.sessionId,
+      );
+      if (!storeResult.ok) {
+        console.error(
+          `Warning: failed to index iteration trace ${tracePath}: ${storeResult.error}`,
+        );
+      }
+
+      last = generated;
+      console.error(
+        `[Ralph][iter ${iter}/${args.maxIters}] Skipping validation (no output produced).`,
+      );
+      continue;
+    }
 
     console.error(
       `[Ralph][iter ${iter}/${args.maxIters}] Running hard validation...`,

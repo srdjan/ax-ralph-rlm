@@ -1,5 +1,31 @@
-import { agent, AxJSRuntime, AxJSRuntimePermission } from "npm:@ax-llm/ax";
+import {
+  agent,
+  AxJSRuntime,
+  AxJSRuntimePermission,
+  type AxStepHooks,
+} from "npm:@ax-llm/ax";
 import { getEnvInt } from "./env.ts";
+import type { WorkerStepRecord } from "./types.ts";
+
+export type StepCollector = {
+  steps: WorkerStepRecord[];
+  hooks: AxStepHooks;
+};
+
+export function makeStepCollector(): StepCollector {
+  const steps: WorkerStepRecord[] = [];
+  const hooks: AxStepHooks = {
+    afterStep(ctx) {
+      steps.push({
+        stepIndex: ctx.stepIndex,
+        promptTokens: ctx.usage.promptTokens,
+        completionTokens: ctx.usage.completionTokens,
+        totalTokens: ctx.usage.totalTokens,
+      });
+    },
+  };
+  return { steps, hooks };
+}
 
 function resolveWorkerBudgets(): { maxSteps: number; maxLlmCalls: number } {
   const maxSteps = Math.max(getEnvInt("AX_WORKER_MAX_STEPS", 80), 2);
