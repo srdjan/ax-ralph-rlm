@@ -80,7 +80,7 @@ deno eval 'import { querySessionTraces } from "./src/lib/git_memory.ts"; const t
 ## Useful flags
 
 ```bash
-deno task demo -- --query "..." --doc docs/long.txt --maxIters 6 --out out
+deno task demo -- --query "..." --doc docs/long.txt --maxIters 6 --out out --progressMs 5000
 ```
 
 ---
@@ -93,6 +93,9 @@ deno task demo -- --query "..." --doc docs/long.txt --maxIters 6 --out out
 - If generation fails with a worker step-budget error, increase:
   - `AX_WORKER_MAX_STEPS` (default `80`)
   - `AX_WORKER_MAX_LLM_CALLS` (default `60`)
+- To reduce long silent pauses, tune progress heartbeat frequency:
+  - `AX_PROGRESS_HEARTBEAT_MS` (default `8000`)
+  - or CLI override `--progressMs 5000`
 - Keep the doc large to see RLM’s value. Replace `docs/long.txt` with a bigger
   corpus.
 

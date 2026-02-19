@@ -18,6 +18,7 @@ type RalphLoopArgs = {
   maxIters: number;
   outDir: string;
   sessionId: string;
+  progressHeartbeatMs: number;
 };
 
 function countBullets(answer: string): number {
@@ -54,13 +55,45 @@ function feedbackConstraints(
   return lines.join("\n");
 }
 
+function formatDuration(durationMs: number): string {
+  if (durationMs < 1_000) return `${durationMs}ms`;
+  return `${(durationMs / 1_000).toFixed(1)}s`;
+}
+
+async function runWithHeartbeat<T>(
+  iter: number,
+  maxIters: number,
+  phaseLabel: string,
+  heartbeatMs: number,
+  task: () => Promise<T>,
+): Promise<{ value: T; durationMs: number }> {
+  const startedAt = Date.now();
+  const timer = heartbeatMs > 0
+    ? setInterval(() => {
+      const elapsed = Date.now() - startedAt;
+      console.error(
+        `[Ralph][iter ${iter}/${maxIters}] ${phaseLabel} still running (${
+          formatDuration(elapsed)
+        } elapsed)...`,
+      );
+    }, heartbeatMs)
+    : undefined;
+
+  try {
+    const value = await task();
+    return { value, durationMs: Date.now() - startedAt };
+  } finally {
+    if (timer !== undefined) clearInterval(timer);
+  }
+}
+
 export async function runRalphLoop(
   deps: RalphLoopDeps,
   args: RalphLoopArgs,
 ): Promise<{ ok: boolean; output: GenerateOut; traces: IterTrace[] }> {
   await Deno.mkdir(args.outDir, { recursive: true });
   console.error(
-    `[Ralph] Starting session ${args.sessionId} (maxIters=${args.maxIters}, outDir=${args.outDir})`,
+    `[Ralph] Starting session ${args.sessionId} (maxIters=${args.maxIters}, outDir=${args.outDir}, heartbeatMs=${args.progressHeartbeatMs})`,
   );
 
   let constraints = baseConstraints();
@@ -71,16 +104,28 @@ export async function runRalphLoop(
     console.error(
       `[Ralph][iter ${iter}/${args.maxIters}] Generating candidate output...`,
     );
-    // .forward() returns a broad type from Ax; cast to the expected output shape
-    const generated = await deps.worker.forward(deps.claudeAI, {
-      context: args.doc,
-      query: args.query,
-      constraints,
-    }) as GenerateOut;
+    const {
+      value: generated,
+      durationMs: generateDurationMs,
+      // .forward() returns a broad type from Ax; cast to the expected output shape
+    } = await runWithHeartbeat(
+      iter,
+      args.maxIters,
+      "Generation",
+      args.progressHeartbeatMs,
+      async () =>
+        await deps.worker.forward(deps.claudeAI, {
+          context: args.doc,
+          query: args.query,
+          constraints,
+        }) as GenerateOut,
+    );
     console.error(
       `[Ralph][iter ${iter}/${args.maxIters}] Generated answer bullets=${
         countBullets(generated.answer)
-      }, evidence=${generated.evidence.length}`,
+      }, evidence=${generated.evidence.length}, duration=${
+        formatDuration(generateDurationMs)
+      }`,
     );
 
     console.error(
@@ -98,16 +143,29 @@ export async function runRalphLoop(
       console.error(
         `[Ralph][iter ${iter}/${args.maxIters}] Running semantic judge...`,
       );
-      const raw = await deps.judge.forward(deps.gptAI, {
-        query: args.query,
-        answer: generated.answer,
-        evidence: generated.evidence,
-        evidenceContext,
-      }) as Partial<JudgeOut>;
+      const { value: raw, durationMs: judgeDurationMs } =
+        await runWithHeartbeat(
+          iter,
+          args.maxIters,
+          "Semantic judge",
+          args.progressHeartbeatMs,
+          async () =>
+            await deps.judge.forward(deps.gptAI, {
+              query: args.query,
+              answer: generated.answer,
+              evidence: generated.evidence,
+              evidenceContext,
+            }) as Partial<JudgeOut>,
+        );
       judge = {
         ok: raw.ok ?? "no",
         issues: Array.isArray(raw.issues) ? raw.issues : [],
       };
+      console.error(
+        `[Ralph][iter ${iter}/${args.maxIters}] Semantic judge completed in ${
+          formatDuration(judgeDurationMs)
+        }.`,
+      );
     } else {
       console.error(
         `[Ralph][iter ${iter}/${args.maxIters}] Skipping semantic judge (hard validation failed).`,

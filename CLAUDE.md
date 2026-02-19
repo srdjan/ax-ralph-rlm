@@ -10,7 +10,7 @@ code in this repository.
 deno task demo -- --query "..." --doc docs/long.txt
 
 # Full flag set
-deno task demo -- --query "..." --doc docs/long.txt --maxIters 6 --out out
+deno task demo -- --query "..." --doc docs/long.txt --maxIters 6 --out out --progressMs 5000
 
 # Type-check
 deno task check
@@ -33,7 +33,8 @@ Copy `.env.example` to `.env` and fill in the two required keys:
 - `OPENAI_APIKEY` - used by the judge agent (GPT)
 
 Optional overrides: `AX_GENERATE_MODEL`, `AX_VALIDATE_MODEL`, `AX_MAX_ITERS`,
-`AX_WORKER_MAX_STEPS`, `AX_WORKER_MAX_LLM_CALLS`, `AX_OUT_DIR`.
+`AX_WORKER_MAX_STEPS`, `AX_WORKER_MAX_LLM_CALLS`, `AX_PROGRESS_HEARTBEAT_MS`,
+`AX_OUT_DIR`.
 
 ## Architecture
 
