@@ -20,6 +20,13 @@ type RalphLoopArgs = {
   sessionId: string;
 };
 
+function countBullets(answer: string): number {
+  return answer
+    .split("\n")
+    .map((line) => line.trimStart())
+    .filter((line) => line.startsWith("- ")).length;
+}
+
 function baseConstraints(): string {
   return [
     "Produce JSON fields exactly as the signature requires.",
@@ -52,33 +59,62 @@ export async function runRalphLoop(
   args: RalphLoopArgs,
 ): Promise<{ ok: boolean; output: GenerateOut; traces: IterTrace[] }> {
   await Deno.mkdir(args.outDir, { recursive: true });
+  console.error(
+    `[Ralph] Starting session ${args.sessionId} (maxIters=${args.maxIters}, outDir=${args.outDir})`,
+  );
 
   let constraints = baseConstraints();
   let last: GenerateOut = { answer: "", evidence: [] };
   const traces: IterTrace[] = [];
 
   for (let iter = 1; iter <= args.maxIters; iter++) {
+    console.error(
+      `[Ralph][iter ${iter}/${args.maxIters}] Generating candidate output...`,
+    );
     // .forward() returns a broad type from Ax; cast to the expected output shape
     const generated = await deps.worker.forward(deps.claudeAI, {
       context: args.doc,
       query: args.query,
       constraints,
     }) as GenerateOut;
+    console.error(
+      `[Ralph][iter ${iter}/${args.maxIters}] Generated answer bullets=${
+        countBullets(generated.answer)
+      }, evidence=${generated.evidence.length}`,
+    );
 
+    console.error(
+      `[Ralph][iter ${iter}/${args.maxIters}] Running hard validation...`,
+    );
     const hard = hardValidate(generated, args.doc);
+    console.error(
+      `[Ralph][iter ${iter}/${args.maxIters}] Hard validation ok=${hard.ok}, issues=${hard.issues.length}`,
+    );
 
     const evidenceContext = buildEvidenceContexts(args.doc, generated.evidence);
 
-    const judge: JudgeOut = hard.ok
-      ? await deps.judge.forward(deps.gptAI, {
+    let judge: JudgeOut;
+    if (hard.ok) {
+      console.error(
+        `[Ralph][iter ${iter}/${args.maxIters}] Running semantic judge...`,
+      );
+      judge = await deps.judge.forward(deps.gptAI, {
         query: args.query,
         answer: generated.answer,
         evidence: generated.evidence,
         evidenceContext,
-      }) as JudgeOut
-      : { ok: "no", issues: [] };
+      }) as JudgeOut;
+    } else {
+      console.error(
+        `[Ralph][iter ${iter}/${args.maxIters}] Skipping semantic judge (hard validation failed).`,
+      );
+      judge = { ok: "no", issues: [] };
+    }
 
     const passed = hard.ok && judge.ok === "yes" && judge.issues.length === 0;
+    console.error(
+      `[Ralph][iter ${iter}/${args.maxIters}] Judge ok=${judge.ok}, issues=${judge.issues.length}, passed=${passed}`,
+    );
 
     const trace: IterTrace = {
       iter,
@@ -95,7 +131,13 @@ export async function runRalphLoop(
     const tracePath = `${args.outDir}/iter-${
       String(iter).padStart(2, "0")
     }.json`;
+    console.error(
+      `[Ralph][iter ${iter}/${args.maxIters}] Writing trace ${tracePath}`,
+    );
     await Deno.writeTextFile(tracePath, JSON.stringify(trace, null, 2));
+    console.error(
+      `[Ralph][iter ${iter}/${args.maxIters}] Indexing trace for session ${args.sessionId}`,
+    );
     const storeResult = await storeIterTrace(
       trace,
       tracePath,
@@ -105,13 +147,19 @@ export async function runRalphLoop(
       console.error(
         `Warning: failed to index iteration trace ${tracePath}: ${storeResult.error}`,
       );
+    } else {
+      console.error(`[Ralph][iter ${iter}/${args.maxIters}] Trace indexed.`);
     }
 
     last = generated;
 
     if (passed) {
+      console.error(`[Ralph] Completed successfully at iteration ${iter}.`);
       return { ok: true, output: generated, traces };
     }
+    console.error(
+      `[Ralph][iter ${iter}/${args.maxIters}] Continuing with feedback constraints.`,
+    );
 
     constraints = feedbackConstraints(
       iter,
@@ -121,5 +169,8 @@ export async function runRalphLoop(
     );
   }
 
+  console.error(
+    `[Ralph] Reached max iterations (${args.maxIters}) without a passing output.`,
+  );
   return { ok: false, output: last, traces };
 }
