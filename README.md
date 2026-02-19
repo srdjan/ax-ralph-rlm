@@ -90,6 +90,9 @@ deno task demo -- --query "..." --doc docs/long.txt --maxIters 6 --out out
 - If your model names differ, override them in `.env`:
   - `AX_GENERATE_MODEL`
   - `AX_VALIDATE_MODEL`
+- If generation fails with a worker step-budget error, increase:
+  - `AX_WORKER_MAX_STEPS` (default `80`)
+  - `AX_WORKER_MAX_LLM_CALLS` (default `60`)
 - Keep the doc large to see RLM’s value. Replace `docs/long.txt` with a bigger
   corpus.
 

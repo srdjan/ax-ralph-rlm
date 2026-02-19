@@ -1,13 +1,30 @@
 import { agent, AxJSRuntime, AxJSRuntimePermission } from "npm:@ax-llm/ax";
+import { getEnvInt } from "./env.ts";
+
+function resolveWorkerBudgets(): { maxSteps: number; maxLlmCalls: number } {
+  const maxSteps = Math.max(getEnvInt("AX_WORKER_MAX_STEPS", 80), 2);
+  const requestedMaxLlmCalls = getEnvInt("AX_WORKER_MAX_LLM_CALLS", 60);
+  const maxLlmCalls = Math.min(requestedMaxLlmCalls, maxSteps - 1);
+
+  if (maxLlmCalls !== requestedMaxLlmCalls) {
+    console.error(
+      `AX_WORKER_MAX_LLM_CALLS=${requestedMaxLlmCalls} exceeds max allowed for maxSteps=${maxSteps}; using ${maxLlmCalls}.`,
+    );
+  }
+
+  return { maxSteps, maxLlmCalls };
+}
 
 export function makeWorkerAgent() {
+  const budgets = resolveWorkerBudgets();
+
   return agent(
     "context:string, query:string, constraints:string -> answer:string, evidence:string[]",
     {
       name: "claudeWorker",
       description:
         "Generates a short, structured answer with verbatim evidence quotes from a long document using RLM mode.",
-      maxSteps: 30,
+      maxSteps: budgets.maxSteps,
       modelConfig: {
         temperature: 0.2,
       },
@@ -22,7 +39,7 @@ export function makeWorkerAgent() {
             AxJSRuntimePermission.TIMING,
           ],
         }),
-        maxLlmCalls: 28,
+        maxLlmCalls: budgets.maxLlmCalls,
         maxRuntimeChars: 2_000,
         maxBatchedLlmQueryConcurrency: 6,
       },
