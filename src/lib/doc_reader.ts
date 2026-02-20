@@ -40,6 +40,10 @@ export function makeDocReaderAgent(): DocReaderAgent {
       "Use llmQuery to retrieve relevant slices from each. Combine what you find into a",
       "compact, structured brief that a reasoning agent can work from.",
       "",
+      "If `docReaderHints` is provided (non-empty), treat it as additional extraction",
+      "targets alongside the task. These hints come from a prior iteration where the",
+      "output was judged insufficient - extract the specific detail requested.",
+      "",
       "Output in `brief`: the most relevant extracted content, clearly structured.",
     ].join("\n"),
   };

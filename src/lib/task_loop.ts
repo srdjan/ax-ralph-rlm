@@ -50,6 +50,18 @@ function baseTaskConstraints(): string {
   ].join("\n");
 }
 
+function deriveDocReaderHints(history: IterFeedback[]): string {
+  if (history.length === 0) return "";
+  const last = history[history.length - 1];
+  if (last.judgeIssues.length === 0 && last.hardIssues.length === 0) return "";
+  const issues = [...last.hardIssues, ...last.judgeIssues];
+  return [
+    "Prior judge raised issues with the output. Extract additional detail",
+    "to address these specifically:",
+    ...issues.map((i) => `- ${i}`),
+  ].join("\n");
+}
+
 function feedbackTaskConstraints(history: IterFeedback[]): string {
   const lines: string[] = [];
   lines.push(baseTaskConstraints());
@@ -104,22 +116,32 @@ export async function runTaskLoop(
     );
 
     const memory = await readMemory(args.memFile);
+    const docReaderHints = deriveDocReaderHints(feedbackHistory);
     const collector = makeStepCollector();
     let brief = "";
     let workerError: WorkerError | undefined;
 
     try {
+      const docReaderInputs: Record<string, string> = {
+        doc: args.doc,
+        memory,
+        task: args.task,
+      };
+      if (docReaderHints.length > 0) {
+        docReaderInputs.docReaderHints = docReaderHints;
+      }
+
       const { value, durationMs } = await runWithHeartbeat(
         iter,
         args.maxIters,
         "DocReader",
         args.progressHeartbeatMs,
         async () =>
-          await deps.docReader.forward(deps.claudeAI, {
-            doc: args.doc,
-            memory,
-            task: args.task,
-          }, { stepHooks: collector.hooks }) as { brief: string },
+          await deps.docReader.forward(
+            deps.claudeAI,
+            docReaderInputs,
+            { stepHooks: collector.hooks },
+          ) as { brief: string },
         "Task",
       );
       brief = value.brief ?? "";
@@ -215,7 +237,8 @@ export async function runTaskLoop(
     // --- Phase 3: Validation ---
     const hard = taskHardValidate(brief, generated);
     console.error(
-      `[Task][iter ${iter}/${args.maxIters}] Hard validation ok=${hard.ok}, issues=${hard.issues.length}`,
+      `[Task][iter ${iter}/${args.maxIters}] Hard validation ok=${hard.ok}, ` +
+        `issues=${hard.issues.length}, briefLen=${brief.length}, outputLen=${generated.output.length}`,
     );
 
     let judge: JudgeOut;
