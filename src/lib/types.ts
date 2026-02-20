@@ -41,3 +41,24 @@ export type IterTrace = {
   passed: boolean;
   workerError?: WorkerError;
 };
+
+export type DocReaderOut = {
+  brief: string;
+};
+
+export type TaskOut = {
+  output: string;
+  memoryUpdate: string;
+};
+
+export type TaskIterTrace = {
+  iter: number;
+  task: string;
+  constraints: string;
+  brief: string;
+  generated: TaskOut;
+  hard: HardValidation;
+  judge?: JudgeOut;
+  passed: boolean;
+  workerError?: WorkerError;
+};

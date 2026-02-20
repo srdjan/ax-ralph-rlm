@@ -1,17 +1,14 @@
-import type {
-  GenerateOut,
-  IterTrace,
-  JudgeOut,
-  WorkerError,
-  WorkerStepRecord,
-} from "./types.ts";
+import type { GenerateOut, IterTrace, JudgeOut, WorkerError } from "./types.ts";
 import { buildEvidenceContexts, hardValidate } from "./hard_validate.ts";
 import { makeStepCollector, type makeWorkerAgent } from "./worker.ts";
 import type { makeJudgeAgent } from "./judge.ts";
 import type { makeClaudeAI, makeGptAI } from "./ai.ts";
 import { storeIterTrace } from "./git_memory.ts";
-import { AxGenerateError } from "npm:@ax-llm/ax";
-import { getEnvInt } from "./env.ts";
+import {
+  classifyWorkerError,
+  formatDuration,
+  runWithHeartbeat,
+} from "./loop_helpers.ts";
 
 type RalphLoopDeps = {
   worker: ReturnType<typeof makeWorkerAgent>;
@@ -61,71 +58,6 @@ function feedbackConstraints(
   lines.push("Previous attempt (fix, don't repeat mistakes):");
   lines.push(prev.answer);
   return lines.join("\n");
-}
-
-function formatDuration(durationMs: number): string {
-  if (durationMs < 1_000) return `${durationMs}ms`;
-  return `${(durationMs / 1_000).toFixed(1)}s`;
-}
-
-async function runWithHeartbeat<T>(
-  iter: number,
-  maxIters: number,
-  phaseLabel: string,
-  heartbeatMs: number,
-  task: () => Promise<T>,
-): Promise<{ value: T; durationMs: number }> {
-  const startedAt = Date.now();
-  const timer = heartbeatMs > 0
-    ? setInterval(() => {
-      const elapsed = Date.now() - startedAt;
-      console.error(
-        `[Ralph][iter ${iter}/${maxIters}] ${phaseLabel} still running (${
-          formatDuration(elapsed)
-        } elapsed)...`,
-      );
-    }, heartbeatMs)
-    : undefined;
-
-  try {
-    const value = await task();
-    return { value, durationMs: Date.now() - startedAt };
-  } finally {
-    if (timer !== undefined) clearInterval(timer);
-  }
-}
-
-function classifyWorkerError(
-  err: unknown,
-  steps: WorkerStepRecord[],
-): WorkerError | null {
-  if (!(err instanceof AxGenerateError)) return null;
-
-  const isMaxSteps = err.message.includes("Max steps reached") ||
-    (err.cause instanceof Error &&
-      err.cause.message.includes("Max steps reached"));
-  if (!isMaxSteps) return null;
-
-  const lastStep = steps.at(-1);
-  const stepsCompleted = lastStep ? lastStep.stepIndex + 1 : 0;
-  const maxSteps = getEnvInt("AX_WORKER_MAX_STEPS", 80);
-  const totalTokensUsed = lastStep?.totalTokens ?? 0;
-
-  return {
-    tag: "max-steps-reached",
-    message: err.message,
-    stepsCompleted,
-    maxSteps,
-    totalTokensUsed,
-    steps,
-    suggestions: [
-      `Increase AX_WORKER_MAX_STEPS (current: ${maxSteps}). Try ${
-        maxSteps * 2
-      }.`,
-      "Increase AX_WORKER_MAX_LLM_CALLS proportionally.",
-      "Simplify the query or reduce document length.",
-    ],
-  };
 }
 
 export async function runRalphLoop(

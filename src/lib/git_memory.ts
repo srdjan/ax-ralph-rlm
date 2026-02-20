@@ -1,4 +1,4 @@
-import type { IterTrace } from "./types.ts";
+import type { IterTrace, TaskIterTrace } from "./types.ts";
 
 export type StoreResult =
   | { ok: true }
@@ -108,14 +108,18 @@ function archivePathFor(
   return `${outDir}/sessions/${sessionId}/${iterName}`;
 }
 
-export function makeSessionId(query: string): string {
+export function makeSessionId(
+  query: string,
+  mode: "qa" | "task" = "qa",
+): string {
   const date = currentLocalDateString();
   const hash = djb2Hex(query);
-  return `${date}/ralph-${hash}`;
+  const prefix = mode === "task" ? "task" : "ralph";
+  return `${date}/${prefix}-${hash}`;
 }
 
 export async function storeIterTrace(
-  trace: IterTrace,
+  trace: IterTrace | TaskIterTrace,
   tracePath: string,
   sessionId: string,
 ): Promise<StoreResult> {
@@ -172,7 +176,7 @@ export async function storeIterTrace(
 export async function querySessionTraces(
   sessionId: string,
   outDir = "out",
-): Promise<IterTrace[]> {
+): Promise<(IterTrace | TaskIterTrace)[]> {
   try {
     const index = await readIndex(outDir);
     const session = index.sessions[sessionId];
@@ -180,13 +184,13 @@ export async function querySessionTraces(
       return [];
     }
 
-    const traces: IterTrace[] = [];
+    const traces: (IterTrace | TaskIterTrace)[] = [];
     const ordered = [...session.iterations].sort((a, b) => a.iter - b.iter);
 
     for (const item of ordered) {
       try {
         const raw = await Deno.readTextFile(item.tracePath);
-        const parsed = JSON.parse(raw) as IterTrace;
+        const parsed = JSON.parse(raw) as IterTrace | TaskIterTrace;
         traces.push(parsed);
       } catch {
         // Skip missing or malformed files so the rest of the session remains queryable.
