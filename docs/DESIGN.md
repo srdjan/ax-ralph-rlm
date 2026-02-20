@@ -1,461 +1,275 @@
-# System Design Document
-
-A high-level guide to the Ralph Loop + RLM system for new developers joining the
-project.
+# Ralph Loop + RLM: How It Works and Why
 
 ---
 
-## 1. What this system does
+## The problem this solves
 
-The system takes a user query and a document, then produces a structured answer
-grounded in the document's actual content. It does this through two nested
-feedback loops:
+You have a long document - a research report, a legal brief, a technical spec -
+and a question about it. You want an answer you can trust, grounded in what the
+document actually says, not what an LLM confidently makes up.
 
-- The **outer loop** (Ralph loop for QA, Task loop for general tasks) generates
-  a candidate output, validates it with both deterministic checks and an LLM
-  judge, and retries with targeted feedback if validation fails.
-- The **inner loop** (RLM mode) runs inside a sandboxed JavaScript runtime. The
-  LLM writes and executes code to explore the document incrementally, calling
-  `llmQuery` sub-queries for semantic analysis rather than stuffing the entire
-  document into its context window.
+The naive approach is to paste the document into an LLM's context window and
+ask. This breaks down in several ways:
 
-The system uses a two-model split: Claude (Anthropic) handles generation, GPT
-(OpenAI) handles validation. This separation prevents the generator from gaming
-its own judge.
+**The document is too long.** Most real documents exceed what fits comfortably
+in a single LLM call. Even when they fit, long-context performance degrades:
+LLMs tend to miss information in the middle and over-weight the beginning and
+end.
 
----
+**You can't verify the answer.** When an LLM says "the report concludes X," you
+have no way to tell whether X is a faithful reading, a paraphrase that shifted
+meaning, or an outright hallucination. There is no audit trail.
 
-## 2. Two operating modes
+**One shot is not enough.** A single LLM call either succeeds or fails silently.
+If the answer is incomplete or wrong, you don't know, and there's no mechanism
+to improve it.
 
-### QA mode (`--mode qa`)
+**RAG doesn't fully solve it either.** Retrieval-augmented generation retrieves
+fixed-size chunks by embedding similarity. This works for lookup questions but
+fails when the answer requires synthesizing information spread across a document,
+or when the relevant chunk is surrounded by text that makes it ambiguous without
+broader context. Retrieval is a blunt instrument.
 
-Produces a structured answer with verbatim evidence. The output has two fields:
-`answer` (3-7 bullet lines) and `evidence` (3-8 exact quotes from the
-document). Each evidence quote must be a verbatim substring - character-for-
-character - of the source document.
-
-### Task mode (`--mode task`, the default)
-
-Reads a document, reasons about a general task, and iteratively improves the
-output with persistent memory across iterations. The output has two fields:
-`output` (the task completion) and `memoryUpdate` (findings persisted for the
-next iteration).
-
-Both modes share the same outer-loop structure: generate, validate, feedback,
-retry.
+This system takes a different approach to all three problems.
 
 ---
 
-## 3. Data flow
+## The core idea: the LLM writes code to read the document
+
+Instead of pasting the document into the LLM's context and hoping for the best,
+this system gives the LLM a JavaScript sandbox with the document loaded as a
+variable. The LLM writes code to explore the document - search for terms,
+extract slices, scan sections, count occurrences - and calls a `llmQuery`
+function for targeted semantic questions about the slices it has found.
+
+The key insight is that code is a precise instrument. An LLM writing
+`context.indexOf("revenue guidance")` will find that exact phrase if it exists,
+or get a definitive -1 if it doesn't. It can then slice out 500 characters
+around the match and call `llmQuery("What does this passage say about future
+revenue?", slice)` to get focused semantic analysis on a small piece of text
+rather than a vague summary of the whole document.
+
+This is the RLM (Recursive Language Models) pattern: the LLM reasons
+through code, using language model calls as a tool within that reasoning
+process, rather than trying to hold the entire document in its attention at
+once.
+
+---
+
+## How the feedback loop works
+
+The system runs in iterations. On each iteration:
+
+1. An agent explores the document and produces a candidate output.
+2. The output is validated - first with fast deterministic rules, then with a
+   separate LLM judge.
+3. If validation fails, the specific issues are formatted as explicit constraints
+   and the next iteration starts with those constraints as hard requirements.
+
+This is the outer loop: generate, validate, improve. It runs up to `maxIters`
+times. By the second or third iteration, the agent has already seen exactly what
+was wrong and has concrete instructions for fixing it.
+
+The judge matters here. The system uses two different LLMs from two different
+providers: Claude (Anthropic) for generation, GPT (OpenAI) for validation. A
+model cannot game a judge it doesn't share weights with. If you used the same
+model to evaluate its own output, it would be easy for the generator to produce
+text that the validator rates highly but that is actually wrong. Cross-model
+validation is an adversarial check that is much harder to fool.
+
+---
+
+## Two modes
 
 ### QA mode
 
-```
-                         +-----------------------------+
-                         |      Ralph Loop (outer)     |
-                         |   ralph.ts / up to maxIters |
-                         +-----------------------------+
-                                      |
-                    +-----------------+-----------------+
-                    |                                   |
-                    v                                   v
-          +------------------+               +-------------------+
-          |  Worker Agent    |               |  Judge Agent      |
-          |  (Claude + RLM)  |               |  (GPT)            |
-          |  rlm_agent.ts    |               |  agent.ts         |
-          +------------------+               +-------------------+
-                    |                                   |
-    +---------------+---------------+                   |
-    |               |               |                   |
-    v               v               v                   v
- sandbox       llmQuery        code exec          semantic check:
- (Deno Worker)  (Claude)      (sloppy eval)     "is each bullet
-                                                  supported by
-                                                  evidence?"
-```
+QA mode produces a structured answer with attached verbatim evidence. The output
+has two fields: an answer (3-7 bullet points) and evidence (3-8 exact quotes).
+Every quote must be a character-for-character substring of the source document -
+not a paraphrase, not a close match, but the exact text.
 
-Step by step:
+This constraint is what makes the output auditable. A reader can search for
+every quote in the document and verify it exists. The answer cannot include
+claims that aren't anchored to a real passage.
 
-1. `main.ts` parses CLI arguments, creates Claude and GPT `LLMClient` objects,
-   constructs agent configurations, and calls `runRalphLoop`.
-
-2. `ralph.ts` runs the outer loop. On each iteration it calls the worker agent
-   to generate a candidate, then validates the output.
-
-3. The worker agent (`worker.ts`) uses `rlmAgentForward` to run the inner RLM
-   loop. This spawns a Deno Worker sandbox, loads the document as a context
-   variable, and lets Claude write JavaScript code to explore the document. The
-   LLM calls `llmQuery` inside the sandbox to ask semantic questions about
-   document slices.
-
-4. Hard validation (`hard_validate.ts`) checks deterministic rules: bullet
-   count, evidence count, quote length, no duplicates, each quote is a verbatim
-   substring of the document.
-
-5. If hard validation passes, evidence contexts are built (220-char windows
-   around each cited quote) and sent to the semantic judge. The GPT judge
-   (`judge.ts`) checks whether each answer bullet is supported by the evidence.
-
-6. If validation fails, the issues are formatted as explicit constraints and
-   appended to the next iteration's prompt.
+The GPT judge receives the answer, the evidence quotes, and a 220-character
+window of surrounding text for each quote. It checks whether each answer bullet
+is actually supported by the evidence it's paired with. Hallucinated bullets
+that aren't covered by any quote get caught here.
 
 ### Task mode
 
-```
-                       +-------------------------------+
-                       |      Task Loop (outer)        |
-                       |  task_loop.ts / up to maxIters|
-                       +-------------------------------+
-                                     |
-               +---------------------+---------------------+
-               |                     |                     |
-               v                     v                     v
-     +------------------+   +------------------+   +------------------+
-     |  DocReader Agent  |   | TaskReasoner     |   | TaskJudge Agent  |
-     |  (Claude + RLM)   |   | (Claude)         |   | (GPT)            |
-     |  rlm_agent.ts     |   | agent.ts         |   | agent.ts         |
-     +------------------+   +------------------+   +------------------+
-               |                     |                     |
-               v                     v                     v
-       extract & summarize     reason about brief     semantic check:
-       relevant info from      to complete the task   "does the output
-       doc + accumulated       and produce findings   substantively
-       memory into a brief     for memory             complete the task?"
-               ^                                           |
-               |          docReaderHints                    |
-               +-------------------------------------------+
-                    (derived from judge/hard issues)
-```
+Task mode is for open-ended work: summarize this document, extract all the
+action items, compare these two sections. The output doesn't need verbatim
+quotes because the task is completion, not fact lookup.
 
-Step by step:
+Task mode adds a persistent memory file. Each iteration appends a block of
+findings to a text file. The next iteration reads that memory before exploring
+the document, so it can build on what prior iterations discovered rather than
+starting from scratch. Memory is budget-trimmed at 1500 characters: when it
+gets too long, the oldest blocks are dropped.
 
-1. `task_loop.ts` reads the persistent memory file and derives
-   `docReaderHints` from the previous iteration's feedback (empty on the first
-   iteration), then calls the DocReader agent.
+Task mode also splits the work between two agents: a DocReader (RLM) that
+extracts relevant information from the document into a compact brief, and a
+TaskReasoner (non-RLM) that reasons over the brief to produce the final output.
+This separation keeps the reasoning agent focused on thinking rather than
+document mechanics.
 
-2. The DocReader (`doc_reader.ts`) uses RLM mode to explore the document and
-   accumulated memory, producing a compact `brief`. If `docReaderHints` is
-   non-empty, the agent treats the hints as additional extraction targets -
-   addressing specific gaps identified by a prior iteration's validation.
-
-3. The TaskReasoner (`task_reasoner.ts`) is a non-RLM agent. It receives the
-   brief, the task, and any constraints, then produces `output` and
-   `memoryUpdate`.
-
-4. The `memoryUpdate` is appended to the persistent memory file
-   (`memory.ts`). Memory is budget-trimmed: when it exceeds 1500 characters,
-   the oldest blocks are dropped.
-
-5. Hard validation (`task_validate.ts`) checks that `output` and `memoryUpdate`
-   are non-empty and meet minimum length thresholds. The log output includes
-   `briefLen` and `outputLen` so thin briefs can be distinguished from
-   underperforming reasoning.
-
-6. If hard validation passes, the TaskJudge (GPT) evaluates whether the output
-   substantively completes the task.
+When the judge flags problems with the TaskReasoner's output, those issues flow
+back to the DocReader as `docReaderHints` on the next iteration. If the judge
+says "the output doesn't address the timeline," the DocReader is told to
+specifically extract timeline information. This closes a feedback loop that most
+systems leave open: if the extracted information was insufficient, the next
+extraction is targeted at exactly what was missing.
 
 ---
 
-## 4. Layer architecture
+## The sandbox in detail
 
-The system has four layers. Each layer depends only on the one below it.
+The sandbox is a Deno Worker - a separate thread running an isolated JavaScript
+environment. When an RLM agent starts, it spawns this worker and sends it the
+document text as a global variable called `context`.
 
-### Layer 1: LLM Client (`llm_client.ts`)
+On each agent step, the LLM returns JavaScript code. The host sends that code to
+the worker, which runs it and returns the output. `var` declarations persist
+across calls (the sandbox uses sloppy-mode eval, not strict mode) so the LLM
+can assign intermediate results and use them in later steps.
 
-The foundation. Defines a unified `LLMClient` interface with a single `chat`
-method. Two implementations exist: `makeAnthropicClient` (Claude via
-`@anthropic-ai/sdk`) and `makeOpenAIClient` (GPT via `openai`).
+`llmQuery` is available inside the sandbox but is not a real function in the
+worker. It is a proxy: when the worker's code calls `llmQuery(prompt, text)`,
+the worker posts a message to the host, the host makes an actual LLM call with
+Claude, and posts the result back. This happens asynchronously and transparently.
+From the LLM's perspective, it writes code that calls `llmQuery` and gets back
+a string. The plumbing is invisible.
 
-The interface abstracts over the significant differences between the two APIs:
-
-- Anthropic separates system messages from the message array, uses content
-  blocks for tool_use responses, and reports `input_tokens`/`output_tokens`.
-- OpenAI inlines system messages, uses function_calling with a different tool
-  schema shape, and reports `prompt_tokens`/`completion_tokens`.
-
-Key types:
-
-- `ChatMessage` - role + content + optional tool call data
-- `ToolDefinition` - name, description, JSON Schema parameters
-- `ChatCompletion` - content, tool calls, token usage, stop reason
-- `LLMClient` - the unified interface
-
-### Layer 2: Agent abstractions (`agent.ts`, `rlm_agent.ts`)
-
-Two agent patterns built on top of `LLMClient`:
-
-**Non-RLM agent** (`agentForward` in `agent.ts`): a loop that sends a system
-prompt and user input to the LLM with a single "output tool" defined via JSON
-Schema. The LLM must call this tool to return structured output. If it doesn't,
-the agent nudges it and retries up to `maxSteps`. Used by the judge,
-task reasoner, and task judge.
-
-**RLM agent** (`rlmAgentForward` in `rlm_agent.ts`): extends the basic agent
-with a persistent JavaScript sandbox. The output tool has two extra helper
-fields: `javascriptCode` (code to execute) and `resultReady` (boolean signal for
-completion). On each step the LLM can either execute code in the sandbox (to
-explore the document, slice data, run computations) or declare its result. The
-sandbox proxies `llmQuery` calls back to the host for semantic sub-queries.
-
-The RLM agent also tracks `llmQuery` call count against a budget. When 80% of
-calls are used it appends a warning. When the budget is exhausted, it returns an
-error message telling the LLM to wrap up.
-
-If the step budget is exhausted before `resultReady: true`, a fallback extractor
-runs: a single LLM call with the accumulated code trajectory attempts to extract
-the best available output.
-
-### Layer 3: Agent configurations (worker, judge, doc_reader, etc.)
-
-Each agent is configured by defining:
-
-- A `definition` string (the domain-specific system prompt)
-- Output fields with their types (`string`, `string[]`, `class` with enum
-  values)
-- Budget parameters (`maxSteps`, `maxLlmCalls`, `temperature`)
-
-For example, the QA worker agent (`worker.ts`) is configured with:
-
-- `contextFields: ["context"]` (the document, loaded into the sandbox)
-- `outputFields: [answer: string, evidence: string[]]`
-- A definition that instructs the LLM to be a "strict technical writer" and
-  follow specific output rules
-
-These configuration modules are thin: they define constants and call the
-appropriate agent forward function.
-
-### Layer 4: Orchestration loops (`ralph.ts`, `task_loop.ts`)
-
-The outer loops wire everything together. They:
-
-- Manage iteration state and constraint accumulation
-- Handle worker step-budget errors gracefully (classify via
-  `classifyWorkerError`, log diagnostics, continue to next iteration)
-- Run hard validation then semantic validation
-- Write per-iteration trace files (`out/iter-XX.json`)
-- Archive traces to session directories via `git_memory.ts`
-- Log progress with configurable heartbeat intervals
+This architecture means the LLM can run multiple `llmQuery` calls in a loop -
+querying dozens of document slices, aggregating answers, refining - without any
+of those calls appearing in the primary conversation history. Each sub-query is
+a separate targeted API call.
 
 ---
 
-## 5. The sandbox: how RLM code execution works
+## Validation in detail
 
-The sandbox is the most mechanically complex part of the system. Here is how it
-works:
+Validation is two-stage and happens every iteration.
 
-### Host side (`rlm_runtime.ts`)
+**Hard validation** runs first and is fully local - no API calls, instant. It
+enforces structural rules: the right number of bullets, the right number of
+evidence quotes, no duplicates, each quote is short enough to be precise, each
+quote is a verbatim substring of the document. Any hard validation failure
+generates a specific error message that goes into the next iteration's
+constraints. The agent gets told exactly which quote wasn't found in the
+document, not just "validation failed."
 
-`createSandboxSession` spawns a Deno Worker from `rlm_worker_script.ts`. It
-sends an `init` message with two things:
+**Semantic validation** runs only if hard validation passes. The GPT judge
+evaluates whether the output is actually good, not just structurally correct. In
+QA mode it checks whether each answer bullet is supported by its evidence. In
+task mode it checks whether the output substantively completes the task.
 
-- **Serializable globals**: context variables (like the document text) are sent
-  as-is.
-- **Function proxy names**: `llmQuery` is not serialized. Instead, the worker
-  creates an async stub that posts a `fn-call` message to the host, which
-  resolves the actual LLM call and posts `fn-result` back.
-
-The `execute(code)` method sends an `execute` message to the worker and returns
-a Promise. While waiting, it handles incoming `fn-call` messages by calling the
-registered proxy function and posting results back.
-
-### Worker side (`rlm_worker_script.ts`)
-
-The worker script handles three message types:
-
-- `init`: sets globals on `globalThis`, creates async proxy functions for each
-  registered function name.
-- `fn-result`: resolves pending Promises from proxy function calls.
-- `execute`: captures console output, detects whether the code contains `await`
-  (async path) or not (sync path), runs the code, and posts the result back.
-
-Key implementation details:
-
-- **Sloppy-mode eval**: `var` declarations persist across `execute` calls
-  because the worker uses indirect eval `(0, eval)(code)` without "use strict".
-  This is essential: the LLM builds up state across steps by assigning variables.
-- **Console capture**: `console.log`, `console.info`, `console.warn`,
-  `console.error`, and `print` are temporarily redirected to capture output.
-  Console output takes priority over the eval return value.
-- **Async detection**: if the code contains the word `await`, it's wrapped in an
-  `AsyncFunction` constructor (async IIFE equivalent). Otherwise it uses
-  synchronous eval.
-- **Auto-return**: for async code, the last expression line is automatically
-  wrapped in `return (...)` so the LLM doesn't need explicit return statements.
-
-### Message protocol summary
-
-```
-Host -> Worker:
-  { type: "init", globals: {...}, fnNames: ["llmQuery"] }
-  { type: "execute", id: 1, code: "var n = context.length; n" }
-  { type: "fn-result", id: 42, value: "The document discusses..." }
-
-Worker -> Host:
-  { type: "result", id: 1, value: "12345" }
-  { type: "fn-call", id: 42, name: "llmQuery", args: ["Summarize this", "..."] }
-```
+Running semantic validation after hard validation is deliberate. It avoids
+wasting API calls judging outputs that are structurally broken. The hard check
+is cheap; the LLM check is not.
 
 ---
 
-## 6. Validation pipeline
+## Why no framework
 
-Validation is two-stage in both modes:
+Most LLM application frameworks are built around abstractions for orchestrating
+chains of LLM calls. This system doesn't use one. The LLM client interface is a
+single `chat` method, implemented twice: once for Anthropic's SDK, once for
+OpenAI's. The agent loops are plain TypeScript functions. The sandbox is a Deno
+Worker with 150 lines of message handling.
 
-### Hard validation (deterministic, local)
+The reason is control. Frameworks abstract over the LLM calling protocol, which
+is exactly the part of the system that needs to be precise: how tool calls are
+formatted, how messages are accumulated, how the stop reason is interpreted, how
+token counts are tracked. Abstracting over that means debugging through two
+layers of indirection when something goes wrong. For a system where the calling
+protocol is load-bearing, that is a bad trade.
 
-QA mode (`hard_validate.ts`):
-
-- Answer must have 3-7 bullet lines starting with `- `
-- Evidence must have 3-8 quotes
-- Each quote must be <= 160 characters
-- No duplicate quotes
-- Each quote must be a verbatim substring of the document (exact match via
-  `String.includes`)
-
-Task mode (`task_validate.ts`):
-
-- `output` and `memoryUpdate` must be non-empty
-- Both must exceed minimum length thresholds
-
-### Semantic validation (LLM judge)
-
-Only runs if hard validation passes. The judge is a non-RLM agent (GPT) that
-returns structured output: `ok: "yes" | "no"` and `issues: string[]`.
-
-QA mode: the judge receives the query, the answer, the evidence quotes, and
-220-character windows around each quote from the document. It checks whether each
-answer bullet is supported by the evidence contexts.
-
-Task mode: the judge receives the task, the output, the brief, and accumulated
-memory. It evaluates whether the output substantively completes the task.
+The other reason is that this system needs to bridge two different APIs with
+different wire formats. Wrapping both in a thin `LLMClient` interface is cleaner
+than depending on a framework's multi-provider support and hoping it handles both
+correctly.
 
 ---
 
-## 7. Trace output and session management
+## Architecture layers
 
-Every iteration writes a JSON trace file to `out/iter-XX.json`. The trace
-includes the query/task, constraints used, generated output, hard validation
-results, judge results, and pass/fail status.
+The system is organized into four layers, each depending only on the one below.
 
-`git_memory.ts` provides session-level trace management:
+**Layer 1: LLMClient** (`llm_client.ts`). A `chat` method, two implementations.
+Handles the translation between Anthropic's and OpenAI's different message
+formats, tool schemas, and token reporting conventions.
 
-- `makeSessionId(query, mode)` generates a deterministic session ID in the
-  format `YYYY-MM-DD/<mode>-<hash8>`.
-- `storeIterTrace` copies each trace into a session directory
-  (`out/sessions/<sessionId>/iter-XX.json`) and updates a session index file
-  (`out/session-index.json`).
-- `querySessionTraces` retrieves all traces for a session, sorted by iteration.
+**Layer 2: Agent loops** (`agent.ts`, `rlm_agent.ts`). Two patterns. The basic
+agent sends a system prompt and user input with a single output tool, loops
+until the LLM calls the tool, and nudges it if it wanders. The RLM agent extends
+this with the sandbox: on each step the LLM can submit code to execute or
+declare it's done. Both loops manage budgets (max steps, max LLM calls) and
+handle exhaustion gracefully - a fallback extractor runs a single summarization
+call over the accumulated trajectory when the budget runs out.
 
----
+**Layer 3: Agent configurations** (`worker.ts`, `doc_reader.ts`, `judge.ts`,
+`task_reasoner.ts`, `task_judge.ts`). Thin modules that define each agent's
+system prompt, output schema, and budget parameters. No logic here, just
+configuration.
 
-## 8. Memory system (Task mode only)
-
-`memory.ts` provides persistent memory across task-loop iterations:
-
-- `readMemory(path)` returns the file contents or empty string if missing.
-- `appendToMemory(path, update, iter)` appends a timestamped block (headed by
-  `## Iter N - <timestamp>`).
-- `trimMemory(content)` enforces a 1500-character budget. When exceeded, the
-  oldest blocks are dropped from the front and a `[trimmed N blocks]` marker is
-  prepended.
-
-This creates a sliding window of the most recent findings. The memory is passed
-to the DocReader as a context variable, so each iteration builds on prior
-iterations' discoveries.
+**Layer 4: Orchestration loops** (`ralph.ts`, `task_loop.ts`). The outer loops
+that wire everything together: manage iteration state, accumulate constraints,
+run validation, write trace files, archive sessions.
 
 ---
 
-## 9. Configuration and environment
-
-The system is configured through environment variables and CLI flags. CLI flags
-take precedence.
-
-| Variable                   | Default                    | Purpose                              |
-| -------------------------- | -------------------------- | ------------------------------------ |
-| `ANTHROPIC_APIKEY`         | (required)                 | Anthropic API key for Claude         |
-| `OPENAI_APIKEY`            | (required)                 | OpenAI API key for GPT               |
-| `AX_GENERATE_MODEL`        | `claude-sonnet-4-20250514` | Claude model for generation          |
-| `AX_VALIDATE_MODEL`        | `gpt-4o-mini`              | OpenAI model for validation          |
-| `AX_MAX_ITERS`             | `4`                        | Max outer loop iterations            |
-| `AX_WORKER_MAX_STEPS`      | `80`                       | Max RLM agent steps per iteration    |
-| `AX_WORKER_MAX_LLM_CALLS`  | `60`                       | Max llmQuery sub-calls per iteration |
-| `AX_PROGRESS_HEARTBEAT_MS` | `8000`                     | Progress log interval                |
-| `AX_OUT_DIR`               | `out`                      | Output directory for traces          |
-
-Model names are validated against allowlists in `ai.ts`. Unrecognized names fall
-back to defaults.
-
----
-
-## 10. Module map
+## Module map
 
 ```
 src/
   main.ts                    CLI entry point, parses args, wires everything
 
   lib/
-    llm_client.ts            Layer 1: LLMClient interface + Anthropic/OpenAI impls
+    llm_client.ts            Layer 1: unified LLMClient + Anthropic/OpenAI impls
     ai.ts                    Client factories (makeClaudeAI, makeGptAI)
 
-    agent.ts                 Layer 2: Non-RLM agent loop + MaxStepsError + output tool builder
+    agent.ts                 Layer 2: basic agent loop + output tool builder
     rlm_agent.ts             Layer 2: RLM agent loop (sandbox + llmQuery + code execution)
-    rlm_runtime.ts           Sandbox: Deno Worker host-side management
-    rlm_worker_script.ts     Sandbox: Worker script (sloppy eval, console capture, fn proxying)
+    rlm_runtime.ts           Sandbox: Deno Worker host management
+    rlm_worker_script.ts     Sandbox: worker script (sloppy eval, console capture, fn proxying)
     rlm_prompt.ts            RLM system prompt template + truncation helpers
 
-    worker.ts                Layer 3: QA worker agent config (RLM)
-    doc_reader.ts            Layer 3: Task-mode document reader config (RLM)
-    judge.ts                 Layer 3: QA semantic judge config
-    task_reasoner.ts         Layer 3: Task-mode reasoning agent config
-    task_judge.ts            Layer 3: Task-mode validation judge config
+    worker.ts                Layer 3: QA worker agent (RLM)
+    doc_reader.ts            Layer 3: task-mode document reader (RLM)
+    judge.ts                 Layer 3: QA semantic judge
+    task_reasoner.ts         Layer 3: task-mode reasoning agent
+    task_judge.ts            Layer 3: task-mode judge
 
-    ralph.ts                 Layer 4: QA outer loop orchestration
-    task_loop.ts             Layer 4: Task outer loop orchestration
+    ralph.ts                 Layer 4: QA outer loop
+    task_loop.ts             Layer 4: task outer loop
 
-    hard_validate.ts         QA deterministic validation rules
-    task_validate.ts         Task deterministic validation rules
-    loop_helpers.ts          Shared: heartbeat, error classification, formatting
-    types.ts                 Shared type definitions (GenerateOut, IterTrace, etc.)
-    env.ts                   Environment variable helpers
-    memory.ts                Persistent memory read/write with budget trimming
-    git_memory.ts            Session trace indexing and archival
+    hard_validate.ts         QA deterministic validation
+    task_validate.ts         task deterministic validation
+    loop_helpers.ts          heartbeat timer, error classification, duration formatting
+    types.ts                 shared types (GenerateOut, IterTrace, etc.)
+    env.ts                   environment variable helpers
+    memory.ts                persistent memory read/write with budget trimming
+    git_memory.ts            session trace indexing and archival
 ```
 
 ---
 
-## 11. Key design decisions
+## Configuration reference
 
-**Two-model split.** The generator and validator use different LLMs from
-different providers. This prevents the generator from learning to produce outputs
-that fool a validator it implicitly understands. GPT judges Claude's work and
-vice versa.
+The system is configured through environment variables. CLI flags take
+precedence when provided.
 
-**Tool-based structured output.** Rather than asking the LLM to produce JSON in
-free text and parsing it out, the system uses the native tool/function calling
-APIs. The LLM is given a tool whose parameters are a JSON Schema matching the
-desired output shape. This constrains the output format at the API level.
-
-**Sloppy-mode eval for state persistence.** The sandbox uses indirect eval
-without "use strict" so `var` declarations attach to `globalThis` and persist
-across execution calls. This lets the LLM build up state incrementally: explore
-the document in step 1, store intermediate results in step 2, aggregate in step
-3, etc.
-
-**Feedback as constraints.** Failed validation doesn't just retry blindly. The
-specific issues (both hard and semantic) are formatted as constraints and
-appended to the next iteration's prompt. Previous output is included so the LLM
-can see exactly what went wrong and improve on it. In task mode, feedback flows
-to both agents: `constraints` steer the TaskReasoner, while `docReaderHints`
-(derived from the same issues) steer the DocReader to extract additional detail
-that was missing in prior iterations.
-
-**Budget-based resource control.** Every expensive operation has a budget:
-`maxIters` for the outer loop, `maxSteps` for the inner agent loop,
-`maxLlmCalls` for sub-queries, `maxRuntimeChars` for output truncation,
-`MEMORY_BUDGET_CHARS` for persistent memory. When budgets are exceeded, the
-system degrades gracefully with warnings and fallback extraction rather than
-crashing.
-
-**No framework dependency.** The system uses `@anthropic-ai/sdk` and `openai`
-directly, with a thin `LLMClient` abstraction. This gives full control over the
-LLM calling protocol and eliminates a large transitive dependency tree.
+| Variable                   | Default                    | Purpose                              |
+| -------------------------- | -------------------------- | ------------------------------------ |
+| `ANTHROPIC_APIKEY`      | (required)                 | Anthropic API key for Claude         |
+| `OPENAI_APIKEY`         | (required)                 | OpenAI API key for GPT               |
+| `GENERATE_MODEL`        | `claude-sonnet-4-20250514` | Claude model for generation          |
+| `VALIDATE_MODEL`        | `gpt-4o-mini`              | OpenAI model for validation          |
+| `MAX_ITERS`             | `4`                        | Max outer loop iterations            |
+| `WORKER_MAX_STEPS`      | `80`                       | Max RLM agent steps per iteration    |
+| `WORKER_MAX_LLM_CALLS`  | `60`                       | Max llmQuery sub-calls per iteration |
+| `PROGRESS_HEARTBEAT_MS` | `8000`                     | Progress log interval (ms)           |
+| `OUT_DIR`               | `out`                      | Output directory for traces          |
