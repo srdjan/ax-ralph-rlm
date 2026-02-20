@@ -32,13 +32,13 @@ export function resolveWorkerBudgets(): {
   maxSteps: number;
   maxLlmCalls: number;
 } {
-  const maxSteps = Math.max(getEnvInt("AX_WORKER_MAX_STEPS", 80), 2);
-  const requestedMaxLlmCalls = getEnvInt("AX_WORKER_MAX_LLM_CALLS", 60);
+  const maxSteps = Math.max(getEnvInt("WORKER_MAX_STEPS", 80), 2);
+  const requestedMaxLlmCalls = getEnvInt("WORKER_MAX_LLM_CALLS", 60);
   const maxLlmCalls = Math.min(requestedMaxLlmCalls, maxSteps - 1);
 
   if (maxLlmCalls !== requestedMaxLlmCalls) {
     console.error(
-      `AX_WORKER_MAX_LLM_CALLS=${requestedMaxLlmCalls} exceeds max allowed for maxSteps=${maxSteps}; using ${maxLlmCalls}.`,
+      `WORKER_MAX_LLM_CALLS=${requestedMaxLlmCalls} exceeds max allowed for maxSteps=${maxSteps}; using ${maxLlmCalls}.`,
     );
   }
 

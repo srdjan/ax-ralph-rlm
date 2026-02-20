@@ -32,14 +32,14 @@ const LEGACY_ANTHROPIC_MODEL = "claude-3-5-sonnet-latest";
 function resolveAnthropicModel(raw: string): string {
   if (raw === LEGACY_ANTHROPIC_MODEL) {
     console.error(
-      `AX_GENERATE_MODEL=${raw} is legacy; using ${DEFAULT_ANTHROPIC_MODEL} instead.`,
+      `GENERATE_MODEL=${raw} is legacy; using ${DEFAULT_ANTHROPIC_MODEL} instead.`,
     );
     return DEFAULT_ANTHROPIC_MODEL;
   }
 
   if (!ANTHROPIC_MODELS.has(raw)) {
     console.error(
-      `AX_GENERATE_MODEL=${raw} is not recognized; using ${DEFAULT_ANTHROPIC_MODEL}.`,
+      `GENERATE_MODEL=${raw} is not recognized; using ${DEFAULT_ANTHROPIC_MODEL}.`,
     );
     return DEFAULT_ANTHROPIC_MODEL;
   }
@@ -50,7 +50,7 @@ function resolveAnthropicModel(raw: string): string {
 function resolveOpenAIModel(raw: string): string {
   if (!OPENAI_MODELS.has(raw)) {
     console.error(
-      `AX_VALIDATE_MODEL=${raw} is not recognized; using ${DEFAULT_OPENAI_MODEL}.`,
+      `VALIDATE_MODEL=${raw} is not recognized; using ${DEFAULT_OPENAI_MODEL}.`,
     );
     return DEFAULT_OPENAI_MODEL;
   }
@@ -60,7 +60,7 @@ function resolveOpenAIModel(raw: string): string {
 
 export function makeClaudeAI(): LLMClient {
   const apiKey = mustGetEnv("ANTHROPIC_APIKEY");
-  const configured = getEnv("AX_GENERATE_MODEL", DEFAULT_ANTHROPIC_MODEL);
+  const configured = getEnv("GENERATE_MODEL", DEFAULT_ANTHROPIC_MODEL);
   const model = resolveAnthropicModel(configured);
   console.error(`Generate model: ${model}`);
   return makeAnthropicClient(apiKey, model);
@@ -68,7 +68,7 @@ export function makeClaudeAI(): LLMClient {
 
 export function makeGptAI(): LLMClient {
   const apiKey = mustGetEnv("OPENAI_APIKEY");
-  const configured = getEnv("AX_VALIDATE_MODEL", DEFAULT_OPENAI_MODEL);
+  const configured = getEnv("VALIDATE_MODEL", DEFAULT_OPENAI_MODEL);
   const model = resolveOpenAIModel(configured);
   console.error(`Validate model: ${model}`);
   return makeOpenAIClient(apiKey, model);

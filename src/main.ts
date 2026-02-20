@@ -42,10 +42,10 @@ const resolvedMode = mode === "qa" ? "qa" : "task";
 
 const query = args.query ??
   "Explain Ralph loop and RLM and how they work together";
-const maxIters = Number(args.maxIters ?? getEnv("AX_MAX_ITERS", "4"));
-const outDir = args.out ?? getEnv("AX_OUT_DIR", "out");
+const maxIters = Number(args.maxIters ?? getEnv("MAX_ITERS", "4"));
+const outDir = args.out ?? getEnv("OUT_DIR", "out");
 const defaultProgressHeartbeatMs = getEnvInt(
-  "AX_PROGRESS_HEARTBEAT_MS",
+  "PROGRESS_HEARTBEAT_MS",
   8_000,
 );
 const progressHeartbeatMs = resolvePositiveIntArg(

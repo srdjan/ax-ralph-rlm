@@ -43,7 +43,7 @@ export function classifyWorkerError(
 
   const lastStep = steps.at(-1);
   const stepsCompleted = lastStep ? lastStep.stepIndex + 1 : 0;
-  const maxSteps = getEnvInt("AX_WORKER_MAX_STEPS", 80);
+  const maxSteps = getEnvInt("WORKER_MAX_STEPS", 80);
   const totalTokensUsed = lastStep?.totalTokens ?? 0;
 
   return {
@@ -54,10 +54,10 @@ export function classifyWorkerError(
     totalTokensUsed,
     steps,
     suggestions: [
-      `Increase AX_WORKER_MAX_STEPS (current: ${maxSteps}). Try ${
+      `Increase WORKER_MAX_STEPS (current: ${maxSteps}). Try ${
         maxSteps * 2
       }.`,
-      "Increase AX_WORKER_MAX_LLM_CALLS proportionally.",
+      "Increase WORKER_MAX_LLM_CALLS proportionally.",
       "Simplify the query or reduce document length.",
     ],
   };

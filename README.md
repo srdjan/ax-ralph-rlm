@@ -187,19 +187,19 @@ const traces = await querySessionTraces("2026-02-20/ralph-d8eb40c5");
 | -------------------------- | -------------------------- | ---------------------------------------- |
 | `ANTHROPIC_APIKEY`         | (required)                 | Anthropic API key                        |
 | `OPENAI_APIKEY`            | (required)                 | OpenAI API key                           |
-| `AX_GENERATE_MODEL`        | `claude-sonnet-4-20250514` | Claude model for generation              |
-| `AX_VALIDATE_MODEL`        | `gpt-4o-mini`              | OpenAI model for validation              |
-| `AX_MAX_ITERS`             | `4`                        | Max outer loop iterations                |
-| `AX_WORKER_MAX_STEPS`      | `80`                       | Max RLM agent steps per iteration        |
-| `AX_WORKER_MAX_LLM_CALLS`  | `60`                       | Max llmQuery sub-calls per iteration     |
-| `AX_PROGRESS_HEARTBEAT_MS` | `8000`                     | Progress log interval during long phases |
-| `AX_OUT_DIR`               | `out`                      | Output directory for traces              |
+| `GENERATE_MODEL`        | `claude-sonnet-4-20250514` | Claude model for generation              |
+| `VALIDATE_MODEL`        | `gpt-4o-mini`              | OpenAI model for validation              |
+| `MAX_ITERS`             | `4`                        | Max outer loop iterations                |
+| `WORKER_MAX_STEPS`      | `80`                       | Max RLM agent steps per iteration        |
+| `WORKER_MAX_LLM_CALLS`  | `60`                       | Max llmQuery sub-calls per iteration     |
+| `PROGRESS_HEARTBEAT_MS` | `8000`                     | Progress log interval during long phases |
+| `OUT_DIR`               | `out`                      | Output directory for traces              |
 
 ## Troubleshooting
 
-- **Worker step-budget errors**: increase `AX_WORKER_MAX_STEPS` (try doubling)
-  and `AX_WORKER_MAX_LLM_CALLS` proportionally.
-- **Long silent pauses**: reduce `AX_PROGRESS_HEARTBEAT_MS` or pass
+- **Worker step-budget errors**: increase `WORKER_MAX_STEPS` (try doubling)
+  and `WORKER_MAX_LLM_CALLS` proportionally.
+- **Long silent pauses**: reduce `PROGRESS_HEARTBEAT_MS` or pass
   `--progressMs 3000`.
 - **Model not recognized**: check the allowed model sets in `src/lib/ai.ts`. The
   system falls back to defaults for unrecognized model names.

@@ -38,9 +38,9 @@ Copy `.env.example` to `.env` and fill in the two required keys:
 - `ANTHROPIC_APIKEY` - used by the generation agent (Claude)
 - `OPENAI_APIKEY` - used by the judge agent (GPT)
 
-Optional overrides: `AX_GENERATE_MODEL`, `AX_VALIDATE_MODEL`, `AX_MAX_ITERS`,
-`AX_WORKER_MAX_STEPS`, `AX_WORKER_MAX_LLM_CALLS`, `AX_PROGRESS_HEARTBEAT_MS`,
-`AX_OUT_DIR`.
+Optional overrides: `GENERATE_MODEL`, `VALIDATE_MODEL`, `MAX_ITERS`,
+`WORKER_MAX_STEPS`, `WORKER_MAX_LLM_CALLS`, `PROGRESS_HEARTBEAT_MS`,
+`OUT_DIR`.
 
 ## Architecture
 
