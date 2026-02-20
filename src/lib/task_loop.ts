@@ -1,8 +1,8 @@
 import type { JudgeOut, TaskIterTrace, TaskOut, WorkerError } from "./types.ts";
-import type { makeDocReaderAgent } from "./doc_reader.ts";
-import type { makeTaskReasonerAgent } from "./task_reasoner.ts";
-import type { makeTaskJudgeAgent } from "./task_judge.ts";
-import type { makeClaudeAI, makeGptAI } from "./ai.ts";
+import type { DocReaderAgent } from "./doc_reader.ts";
+import type { TaskReasonerAgent } from "./task_reasoner.ts";
+import type { TaskJudgeAgent } from "./task_judge.ts";
+import type { LLMClient } from "./llm_client.ts";
 import { makeStepCollector } from "./worker.ts";
 import { storeIterTrace } from "./git_memory.ts";
 import { appendToMemory, readMemory } from "./memory.ts";
@@ -14,11 +14,11 @@ import {
 } from "./loop_helpers.ts";
 
 type TaskLoopDeps = {
-  docReader: ReturnType<typeof makeDocReaderAgent>;
-  taskReasoner: ReturnType<typeof makeTaskReasonerAgent>;
-  judge: ReturnType<typeof makeTaskJudgeAgent>;
-  claudeAI: ReturnType<typeof makeClaudeAI>;
-  gptAI: ReturnType<typeof makeGptAI>;
+  docReader: DocReaderAgent;
+  taskReasoner: TaskReasonerAgent;
+  judge: TaskJudgeAgent;
+  claudeAI: LLMClient;
+  gptAI: LLMClient;
 };
 
 type TaskLoopArgs = {

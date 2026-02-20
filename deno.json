@@ -4,5 +4,12 @@
     "check": "deno check src/main.ts",
     "fmt": "deno fmt",
     "lint": "deno lint"
+  },
+  "imports": {
+    "@anthropic-ai/sdk": "npm:@anthropic-ai/sdk@^0.39.0",
+    "openai": "npm:openai@^4.78.0",
+    "@std/dotenv/load": "jsr:@std/dotenv@0.225.3/load",
+    "@std/cli/parse-args": "jsr:@std/cli@1.0.17/parse-args",
+    "@std/assert": "jsr:@std/assert@1.0.13"
   }
 }

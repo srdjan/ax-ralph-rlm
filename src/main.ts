@@ -1,7 +1,7 @@
 // Load .env into Deno.env (safe no-op if no .env file exists)
-import "jsr:@std/dotenv/load";
+import "@std/dotenv/load";
 
-import { parseArgs } from "jsr:@std/cli/parse-args";
+import { parseArgs } from "@std/cli/parse-args";
 import { getEnv, getEnvInt } from "./lib/env.ts";
 import { makeClaudeAI, makeGptAI } from "./lib/ai.ts";
 import { makeWorkerAgent } from "./lib/worker.ts";

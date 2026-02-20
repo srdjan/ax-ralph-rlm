@@ -1,4 +1,4 @@
-import { assertEquals, assertMatch } from "jsr:@std/assert";
+import { assertEquals, assertMatch } from "@std/assert";
 import {
   makeSessionId,
   querySessionTraces,

@@ -1,8 +1,8 @@
 import type { GenerateOut, IterTrace, JudgeOut, WorkerError } from "./types.ts";
 import { buildEvidenceContexts, hardValidate } from "./hard_validate.ts";
-import { makeStepCollector, type makeWorkerAgent } from "./worker.ts";
-import type { makeJudgeAgent } from "./judge.ts";
-import type { makeClaudeAI, makeGptAI } from "./ai.ts";
+import { makeStepCollector, type WorkerAgent } from "./worker.ts";
+import type { JudgeAgent } from "./judge.ts";
+import type { LLMClient } from "./llm_client.ts";
 import { storeIterTrace } from "./git_memory.ts";
 import {
   classifyWorkerError,
@@ -11,10 +11,10 @@ import {
 } from "./loop_helpers.ts";
 
 type RalphLoopDeps = {
-  worker: ReturnType<typeof makeWorkerAgent>;
-  judge: ReturnType<typeof makeJudgeAgent>;
-  claudeAI: ReturnType<typeof makeClaudeAI>;
-  gptAI: ReturnType<typeof makeGptAI>;
+  worker: WorkerAgent;
+  judge: JudgeAgent;
+  claudeAI: LLMClient;
+  gptAI: LLMClient;
 };
 
 type RalphLoopArgs = {
@@ -36,8 +36,8 @@ function countBullets(answer: string): number {
 function baseConstraints(): string {
   return [
     "Produce JSON fields exactly as the signature requires.",
-    "answer: 3–7 bullet lines starting with '- '.",
-    "evidence: 3–8 verbatim quotes copied from the document.",
+    "answer: 3-7 bullet lines starting with '- '.",
+    "evidence: 3-8 verbatim quotes copied from the document.",
     "Evidence quotes must be exact substrings; keep them short (<=160 chars).",
   ].join("\n");
 }
@@ -91,12 +91,14 @@ export async function runRalphLoop(
         args.maxIters,
         "Generation",
         args.progressHeartbeatMs,
-        async () =>
-          await deps.worker.forward(deps.claudeAI, {
+        async () => {
+          const raw = await deps.worker.forward(deps.claudeAI, {
             context: args.doc,
             query: args.query,
             constraints,
-          }, { stepHooks: collector.hooks }) as GenerateOut,
+          }, { stepHooks: collector.hooks });
+          return raw as GenerateOut;
+        },
       );
       generated = value;
       console.error(

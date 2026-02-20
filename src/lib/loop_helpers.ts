@@ -1,4 +1,4 @@
-import { AxGenerateError } from "npm:@ax-llm/ax";
+import { MaxStepsError } from "./agent.ts";
 import { getEnvInt } from "./env.ts";
 import type { WorkerError, WorkerStepRecord } from "./types.ts";
 
@@ -39,12 +39,7 @@ export function classifyWorkerError(
   err: unknown,
   steps: WorkerStepRecord[],
 ): WorkerError | null {
-  if (!(err instanceof AxGenerateError)) return null;
-
-  const isMaxSteps = err.message.includes("Max steps reached") ||
-    (err.cause instanceof Error &&
-      err.cause.message.includes("Max steps reached"));
-  if (!isMaxSteps) return null;
+  if (!(err instanceof MaxStepsError)) return null;
 
   const lastStep = steps.at(-1);
   const stepsCompleted = lastStep ? lastStep.stepIndex + 1 : 0;

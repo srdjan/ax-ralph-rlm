@@ -38,18 +38,27 @@ Optional overrides: `AX_GENERATE_MODEL`, `AX_VALIDATE_MODEL`, `AX_MAX_ITERS`,
 
 ## Architecture
 
-This is a Deno proof-of-concept using the `@ax-llm/ax` library. The system
-implements two nested loops over a document.
+This is a Deno proof-of-concept using the Anthropic and OpenAI SDKs directly.
+The system implements two nested loops over a document.
 
 **Outer loop - Ralph loop** (`src/lib/ralph.ts`): iterates up to `maxIters`
 times. Each iteration generates an answer, validates it, and either returns it
 or feeds failures back as constraints for the next attempt. Per-iteration traces
 are written to `out/iter-XX.json`.
 
-**Inner loop - RLM mode** (`src/lib/worker.ts`): the worker agent runs with
-`rlm.mode="inline"`, which loads the document into a sandboxed `AxJSRuntime`
-(JavaScript interpreter). The agent can query slices of the document from within
-the runtime rather than stuffing the full text into its context window.
+**Inner loop - RLM mode** (`src/lib/worker.ts`): the worker agent runs in RLM
+inline mode, which loads the document into a sandboxed Deno Worker (JavaScript
+interpreter via `src/lib/rlm_runtime.ts`). The agent can query slices of the
+document from within the runtime rather than stuffing the full text into its
+context window.
+
+**LLM client layer** (`src/lib/llm_client.ts`): unified `LLMClient` interface
+wrapping both `@anthropic-ai/sdk` and `openai` SDKs. Handles message format
+translation, tool calling, and token usage extraction.
+
+**Agent layer**: non-RLM agents (`src/lib/agent.ts`) use tool-based structured
+output loops. RLM agents (`src/lib/rlm_agent.ts`) add a persistent JS sandbox
+with `llmQuery` proxying for semantic sub-queries.
 
 **Two-model split:**
 
